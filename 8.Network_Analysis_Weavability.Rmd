@@ -1,0 +1,602 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+# Set Global Variables here
+
+```{r}
+# Please change the working directory
+Working_dir <- "~/Desktop/AVATAR/PADIT-seq-Manuscript/Code_Availability/"
+
+# Please be sure to install these libraries
+library(pheatmap); library(ggplot2); library(DESeq2); library(ggrepel); library("stringr"); library(igraph)
+
+# FDR cutoff (do not change)
+Cutoff_Value <- 0.05
+```
+
+# Important functions
+```{r}
+################################################################# Custom Functions
+compare_strings <- function(string1, string2) {
+  
+  # Check if both strings are of the same length
+  if (nchar(string1) != nchar(string2)) {
+    return(0)
+  }
+  
+  # Check if strings contain only valid letters
+  valid_letters <- c("A", "C", "G", "T")
+  if (any(!strsplit(string1, NULL)[[1]] %in% valid_letters) || any(!strsplit(string2, NULL)[[1]] %in% valid_letters)) {
+    stop("Invalid characters detected. Strings can only contain letters from c('A', 'C', 'G', 'T').")
+  }
+  
+  # Form new strings based on the given conditions
+  for (letter in valid_letters) {
+    str1_modified_front <- paste0(substring(string1, 2, nchar(string1)), letter)
+    str1_modified_back <- paste0(letter, substring(string1, 1, nchar(string1) - 1))
+    
+    # Check if any of the modified strings are equal to string2
+    if (str1_modified_front == string2) {
+      return(1)
+    }
+    # Check if any of the modified strings are equal to string2
+    # if (str1_modified_back == string2) {
+    #   return(-1)
+    # }
+  }
+  
+  return(0)
+}
+
+# Test
+print(compare_strings("ACGT", "CGTG"))  # Should return 1
+print(compare_strings("ACGT", "CGTA"))  # Should return 1
+print(compare_strings("ACGT", "AACG"))  # Should return 0
+print(compare_strings("ACGT", "TCGT"))  # Should return 0
+
+######################################################### 
+hamming_distance_is1 <- function(str1, str2) {
+  # Check if the lengths of the strings are the same
+  if (nchar(str1) != nchar(str2)) {
+    stop("Strings are not of the same length.")
+  }
+  
+  # Convert strings to character vectors
+  chars1 <- unlist(strsplit(str1, split = ""))
+  chars2 <- unlist(strsplit(str2, split = ""))
+  
+  # Compute Hamming distance
+  distance <- sum(chars1 != chars2)
+  
+  # Return 1 if the distance is 1, otherwise return 0
+  if (distance == 1) {
+    return(1)
+  } else {
+    return(0)
+  }
+}
+
+# Test the function
+str1 <- "abcd"
+str2 <- "abcf"
+print(hamming_distance_is1(str1, str2))  # Expected output: 1
+
+```
+
+# Network Analysis for HOXD13
+```{r}
+################################################################# Read HOXD13 8-mer PADIT-seq log2foldchange values for the 3 registers
+Register_1_8 <- read.table(paste(paste(Working_dir, "Output_Files", sep = "/"), "HOXD13_all8mers_1_8_median.txt", sep = "/"), header = TRUE)
+Register_2_9 <- read.table(paste(paste(Working_dir, "Output_Files", sep = "/"), "HOXD13_all8mers_2_9_median.txt", sep = "/"), header = TRUE)
+Register_3_10 <- read.table(paste(paste(Working_dir, "Output_Files", sep = "/"), "HOXD13_all8mers_3_10_median.txt", sep = "/"), header = TRUE)
+
+# Re-define MPRAactivity
+Register_1_8$MPRAactivity <- (Register_1_8$log2FoldChange > 0 & Register_1_8$padj < Cutoff_Value)*1
+Register_2_9$MPRAactivity <- (Register_2_9$log2FoldChange > 0 & Register_2_9$padj < Cutoff_Value)*1
+Register_3_10$MPRAactivity <- (Register_3_10$log2FoldChange > 0 & Register_3_10$padj < Cutoff_Value)*1
+
+# Number of red points?
+table(Register_1_8$MPRAactivity)
+table(Register_2_9$MPRAactivity)
+table(Register_3_10$MPRAactivity)
+
+# Format
+colnames(Register_1_8) <- paste(colnames(Register_1_8), "1_8", sep = "_")
+colnames(Register_2_9) <- paste(colnames(Register_2_9), "2_9", sep = "_")
+colnames(Register_3_10) <- paste(colnames(Register_3_10), "3_10", sep = "_")
+TEMP1 <- merge(Register_1_8, Register_2_9,
+               by.x = "X8.mer_1_8", by.y = "X8.mer_2_9")
+TEMP2 <- merge(TEMP1, Register_3_10,
+               by.x = "X8.mer_1_8", by.y = "X8.mer_3_10")
+HOXD13_PBM_Escores_PADIT <- TEMP2; rm(TEMP1); rm(TEMP2)
+HOXD13_PBM_Escores_PADIT$Mean_log2FC <- apply(HOXD13_PBM_Escores_PADIT[,c("log2FoldChange_1_8", "log2FoldChange_2_9", "log2FoldChange_3_10")], 1, median)
+HOXD13_PBM_Escores_PADIT$MPRAactivity <- apply(HOXD13_PBM_Escores_PADIT[,c("MPRAactivity_1_8", "MPRAactivity_2_9", "MPRAactivity_3_10")], 1, median)
+
+#
+df1 <- HOXD13_PBM_Escores_PADIT[,c("X8.mer_1_8", "Mean_log2FC", "MPRAactivity")]
+colnames(df1) <- c("TFBS", "log2FoldChange", "MPRAactivity")
+df2 <- HOXD13_PBM_Escores_PADIT[,c("X8.mer.1_1_8", "Mean_log2FC", "MPRAactivity")]
+colnames(df2) <- c("TFBS", "log2FoldChange", "MPRAactivity")
+dds_results_HOXD13_df <- rbind(df1, df2)
+
+# 
+dds_results_HOXD13_df_sig <- unique(dds_results_HOXD13_df[which(dds_results_HOXD13_df$MPRAactivity == 1),])
+dim(dds_results_HOXD13_df_sig)
+
+######################################################### Random Sampling?
+# TEMP <-  sample(1:nrow(HOXD13_PBM_Escores_PADIT), 1613, replace = FALSE)
+# #
+# df1 <- HOXD13_PBM_Escores_PADIT[TEMP, c("X8.mer_1_8", "Mean_log2FC", "MPRAactivity")]
+# colnames(df1) <- c("TFBS", "log2FoldChange", "MPRAactivity")
+# df2 <- HOXD13_PBM_Escores_PADIT[TEMP, c("X8.mer.1_1_8", "Mean_log2FC", "MPRAactivity")]
+# colnames(df2) <- c("TFBS", "log2FoldChange", "MPRAactivity")
+# dds_results_HOXD13_df <- rbind(df1, df2)
+# 
+# #
+# dds_results_HOXD13_df_sig <- unique(dds_results_HOXD13_df)
+# dim(dds_results_HOXD13_df_sig)
+
+######################################################### Create Adjacency matrix
+# Your vector of strings
+strings_vector <- dds_results_HOXD13_df_sig$TFBS
+
+# Number of strings
+n <- length(strings_vector)
+
+# Create an empty adjacency matrix
+adj_matrix <- matrix(0, n, n)
+
+# Fill the upper triangle of the matrix
+for (i in 1:n) {
+  for (j in 1:n) {
+    
+    # Weavability
+    adj_matrix[i, j] <- hamming_distance_is1(strings_vector[i], strings_vector[j]) # compare_strings(strings_vector[i], strings_vector[j])
+    
+  }
+}
+
+# Names
+rownames(adj_matrix) <- dds_results_HOXD13_df_sig$TFBS
+colnames(adj_matrix) <- dds_results_HOXD13_df_sig$TFBS
+
+######################################################### determine the size of the largest connected component 
+# Convert the adjacency matrix to an igraph object
+graph <- graph_from_adjacency_matrix(as.matrix(adj_matrix), mode = "directed", diag = FALSE, weighted=TRUE)
+
+# Find the connected components
+comp <- components(graph)
+
+# Determine the size of the largest connected component
+size_of_largest_connected_component <- max(comp$csize)
+print(size_of_largest_connected_component)
+
+# 
+columnNames <- colnames(dds_results_HOXD13_df_sig)
+TEMP <- merge(dds_results_HOXD13_df_sig, comp$membership, by.x = "TFBS", by.y = 0)
+dds_results_HOXD13_df_sig <- TEMP
+colnames(dds_results_HOXD13_df_sig) <- c(columnNames, "Membership")
+
+# 
+dds_results_HOXD13_df_sig$Membership <- (dds_results_HOXD13_df_sig$Membership == 1)*1
+
+# Number of nodes
+nrow(dds_results_HOXD13_df_sig)
+
+######################################################## Boxplot and histogram
+# Calculate the degree of each vertex
+degree_vector <- degree(graph)
+
+# 
+columnNames <- colnames(dds_results_HOXD13_df_sig)
+TEMP <- merge(dds_results_HOXD13_df_sig, degree_vector, by.x = "TFBS", by.y = 0)
+dds_results_HOXD13_df_sig <- TEMP
+colnames(dds_results_HOXD13_df_sig) <- c(columnNames, "Degrees")
+
+# 
+# dds_results_HOXD13_df_sig$Degrees[which(dds_results_HOXD13_df_sig$Membership == 0)] <- 0
+
+# Boxplot
+boxplot(log2FoldChange ~ Degrees, data = dds_results_HOXD13_df_sig, 
+        notch = TRUE, outline = FALSE, col = "red", 
+        xlab = "Number of edges", ylab = "PADIT-seq log2FC")
+table(dds_results_HOXD13_df_sig$Degrees)
+
+# Pairwise wilcoxon test
+pairwise.wilcox.test(dds_results_HOXD13_df_sig$log2FoldChange, dds_results_HOXD13_df_sig$Degrees)
+
+```
+
+
+
+# Network Analysis for EGR1
+```{r}
+################################################################# Read EGR1 9-mer PADIT-seq log2foldchange values for the 2 registers
+Register_1_9 <- read.table(paste(paste(Working_dir, "Output_Files", sep = "/"), "ZIF268_all9mers_1_9_median.txt", sep = "/"), header = TRUE)
+Register_2_10 <- read.table(paste(paste(Working_dir, "Output_Files", sep = "/"), "ZIF268_all9mers_2_10_median.txt", sep = "/"), header = TRUE)
+
+# Re-define MPRAactivity
+Register_1_9$MPRAactivity <- (Register_1_9$log2FoldChange > 0 & Register_1_9$padj < Cutoff_Value)*1
+Register_2_10$MPRAactivity <- (Register_2_10$log2FoldChange > 0 & Register_2_10$padj < Cutoff_Value)*1
+
+# Format
+colnames(Register_1_9) <- paste(colnames(Register_1_9), "1_9", sep = "_")
+colnames(Register_2_10) <- paste(colnames(Register_2_10), "2_10", sep = "_")
+TEMP1 <- merge(Register_1_9, Register_2_10,
+               by.x = "X9.mer_1_9", by.y = "X9.mer_2_10")
+ZIF268_PBM_Escores_PADIT <- TEMP1; rm(TEMP1)
+ZIF268_PBM_Escores_PADIT$Mean_log2FC <- apply(ZIF268_PBM_Escores_PADIT[,c("log2FoldChange_1_9", "log2FoldChange_2_10")], 1, min)
+ZIF268_PBM_Escores_PADIT$MPRAactivity <- apply(ZIF268_PBM_Escores_PADIT[,c("MPRAactivity_1_9", "MPRAactivity_2_10")], 1, min)
+
+#
+df1 <- ZIF268_PBM_Escores_PADIT[,c("X9.mer_1_9", "Mean_log2FC", "MPRAactivity")]
+colnames(df1) <- c("TFBS", "log2FoldChange", "MPRAactivity")
+df2 <- ZIF268_PBM_Escores_PADIT[,c("X9.mer.1_1_9", "Mean_log2FC", "MPRAactivity")]
+colnames(df2) <- c("TFBS", "log2FoldChange", "MPRAactivity")
+dds_results_EGR1_df <- rbind(df1, df2)
+dds_results_EGR1_df$MPRAactivity[is.na(dds_results_EGR1_df$MPRAactivity)] <- 0
+
+# 
+dds_results_EGR1_df_sig <- unique(dds_results_EGR1_df[which(dds_results_EGR1_df$MPRAactivity == 1),])
+dim(dds_results_EGR1_df_sig)
+
+######################################################### Random Sampling?
+# TEMP <-  sample(1:nrow(dds_results_EGR1_df), 910, replace = FALSE)
+# #
+# df1 <- dds_results_EGR1_df[TEMP, c("X8.mer_1_8", "Mean_log2FC", "MPRAactivity")]
+# colnames(df1) <- c("TFBS", "log2FoldChange", "MPRAactivity")
+# df2 <- dds_results_EGR1_df[TEMP, c("X8.mer.1_1_8", "Mean_log2FC", "MPRAactivity")]
+# colnames(df2) <- c("TFBS", "log2FoldChange", "MPRAactivity")
+# dds_results_EGR1_df <- rbind(df1, df2)
+# 
+# # 
+# dds_results_EGR1_df_sig <- unique(dds_results_EGR1_df)
+# dim(dds_results_EGR1_df_sig)
+
+######################################################### Create Adjacency matrix
+# Your vector of strings
+strings_vector <- dds_results_EGR1_df_sig$TFBS
+
+# Number of strings
+n <- length(strings_vector)
+
+# Create an empty adjacency matrix
+adj_matrix <- matrix(0, n, n)
+
+# Fill the upper triangle of the matrix
+for (i in 1:n) {
+  for (j in 1:n) {
+    adj_matrix[i, j] <- compare_strings(strings_vector[i], strings_vector[j])
+  }
+}
+
+# Names
+rownames(adj_matrix) <- dds_results_EGR1_df_sig$TFBS
+colnames(adj_matrix) <- dds_results_EGR1_df_sig$TFBS
+
+######################################################## 
+# Convert the adjacency matrix to an igraph object
+graph <- graph_from_adjacency_matrix(as.matrix(adj_matrix), mode = "directed", diag = FALSE, weighted=TRUE)
+
+# Find the connected components
+comp <- components(graph)
+
+# 
+table_Membership <- table(comp$membership)
+table_table_Membership <- table(table_Membership)
+
+# Select one of each in 'table_table_Membership'
+Membership_1 <- table_Membership[which(table_Membership == names(table_table_Membership)[1])]
+Membership_2 <- table_Membership[which(table_Membership == names(table_table_Membership)[2])]
+Membership_3 <- table_Membership[which(table_Membership == names(table_table_Membership)[3])]
+Membership_12 <- table_Membership[which(table_Membership == names(table_table_Membership)[4])]
+Membership_489 <- table_Membership[which(table_Membership == names(table_table_Membership)[5])]
+
+#
+set.seed(38947289)
+Membership_1_half <- sample(Membership_1, length(Membership_1)/2)
+Membership_2_half <- sample(Membership_2, length(Membership_2)/2)
+Membership_3_half <- sample(Membership_3, length(Membership_3)/2)
+Membership_12_half <- sample(Membership_12, length(Membership_12)/2)
+Membership_489_half <- sample(Membership_489, length(Membership_489)/2)
+
+#
+membership_ids_include <- c(Membership_1_half,
+                            Membership_2_half,
+                            Membership_3_half,
+                            Membership_12_half,
+                            Membership_489_half)
+
+#
+TFBS_include <- names(comp$membership[which(comp$membership %in% names(membership_ids_include))])
+
+################################################################# 
+TEMP <- adj_matrix[which(rownames(adj_matrix) %in% TFBS_include), which(rownames(adj_matrix) %in% TFBS_include)]
+adj_matrix <- TEMP; rm(TEMP)
+
+######################################################### determine the size of the largest connected component 
+# Convert the adjacency matrix to an igraph object
+graph <- graph_from_adjacency_matrix(as.matrix(adj_matrix), mode = "directed", diag = FALSE, weighted=TRUE)
+
+# Find the connected components
+comp <- components(graph)
+
+# Determine the size of the largest connected component
+size_of_largest_connected_component <- max(comp$csize)
+print(size_of_largest_connected_component)
+
+# 
+columnNames <- colnames(dds_results_EGR1_df_sig)
+TEMP <- merge(dds_results_EGR1_df_sig, comp$membership, by.x = "TFBS", by.y = 0)
+dds_results_EGR1_df_sig <- TEMP
+colnames(dds_results_EGR1_df_sig) <- c(columnNames, "Membership")
+
+# 
+dds_results_EGR1_df_sig$Membership <- (dds_results_EGR1_df_sig$Membership == 1)*1
+
+# Number of nodes
+nrow(dds_results_EGR1_df_sig)
+
+######################################################## Boxplot and histogram
+# Calculate the degree of each vertex
+degree_vector <- degree(graph)
+
+# 
+columnNames <- colnames(dds_results_EGR1_df_sig)
+TEMP <- merge(dds_results_EGR1_df_sig, degree_vector, by.x = "TFBS", by.y = 0)
+dds_results_EGR1_df_sig <- TEMP
+colnames(dds_results_EGR1_df_sig) <- c(columnNames, "Degrees")
+
+# Boxplot
+boxplot(log2FoldChange ~ Degrees, data = dds_results_EGR1_df_sig, 
+        notch = TRUE, outline = FALSE, col = "black", 
+        xlab = "Number of edges", ylab = "PADIT-seq log2FC")
+table(dds_results_EGR1_df_sig$Degrees)
+
+# Pairwise wilcoxon test
+pairwise.wilcox.test(dds_results_EGR1_df_sig$log2FoldChange, dds_results_EGR1_df_sig$Degrees)
+
+######################################################## After clubbing
+dds_results_EGR1_df_sig_format <- dds_results_EGR1_df_sig
+dds_results_EGR1_df_sig_format$Degrees[which(dds_results_EGR1_df_sig_format$Degrees == 2)] <- 1
+dds_results_EGR1_df_sig_format$Degrees[which(dds_results_EGR1_df_sig_format$Degrees == 4)] <- 3
+dds_results_EGR1_df_sig_format$Degrees[which(dds_results_EGR1_df_sig_format$Degrees == 6)] <- 5
+dds_results_EGR1_df_sig_format$Degrees[which(dds_results_EGR1_df_sig_format$Degrees == 7)] <- 5
+
+# Boxplot
+boxplot(log2FoldChange ~ Degrees, data = dds_results_EGR1_df_sig_format, 
+        notch = TRUE, outline = FALSE, col = "red", 
+        xlab = "Number of edges", ylab = "PADIT-seq log2FC")
+table(dds_results_EGR1_df_sig_format$Degrees)
+
+# Pairwise wilcoxon test
+pairwise.wilcox.test(dds_results_EGR1_df_sig_format$log2FoldChange, dds_results_EGR1_df_sig_format$Degrees)
+
+```
+
+
+# Does Weavability generalize across TF families? Run on randomly selected 8-mers
+```{r}
+############################## Does Weavability generalize across TF families?
+# Select how many top 8-mers?
+Top_HowMany_8mers <- 500
+
+# Add the PBM file locations of TFs to be analyzed 
+numSims <- 1000
+Select_TF <- c(rep("/Random/Random1_8mers_11111111.txt", times = numSims))
+
+# Specify the directory of data files
+Directory <- paste(Working_dir, "Input_Files/PBM_data_NetworkAnalysis_100TFs", sep = "/")
+
+# Loop over the files, create adjacency matrix, obtain the highest number of connected components and store in "Weavability_df"
+Weavability_df <- data.frame()
+for(k in 1:length(Select_TF))
+{
+  print(k)
+    # Read
+    Current_df <- read.table(paste0(Directory, Select_TF[k], ""), header = TRUE)
+    # Sample
+    Current_df <- Current_df[sample(1:nrow(Current_df), Top_HowMany_8mers, replace = FALSE), ]
+    # Select top 8-mers
+    strings_vector <- unique(c(Current_df$X8.mer[1:Top_HowMany_8mers], Current_df$X8.mer.RC[1:Top_HowMany_8mers]))
+
+  #################### Create Adjacency matrix
+  # Number of strings
+  n <- length(strings_vector)
+  # Create an empty adjacency matrix
+  adj_matrix <- matrix(0, n, n)
+  # Fill the upper triangle of the matrix
+  for (i in 1:n) {
+    for (j in 1:n) {
+      # Weavability
+      adj_matrix[i, j] <- compare_strings(strings_vector[i], strings_vector[j])
+    }
+  }
+  # Names
+  rownames(adj_matrix) <- strings_vector
+  colnames(adj_matrix) <- strings_vector
+
+  # Convert the adjacency matrix to an igraph object
+  graph_adjmat <- graph_from_adjacency_matrix(as.matrix(adj_matrix), mode = "directed", diag = FALSE, weighted=TRUE)
+
+  # Find the connected components
+  comp_connected <- components(graph_adjmat)
+
+  # Determine the size of the largest connected component
+  size_of_largest_connected_component <- max(comp_connected$csize)
+
+  # 
+  vec_to_add <- c(str_split(Select_TF[k], pattern = "/")[[1]][2], size_of_largest_connected_component, nrow(adj_matrix))
+
+  # 
+  Weavability_df <- rbind(Weavability_df, vec_to_add)
+
+  #
+  file_name.tmp1 <- str_split(Select_TF[k], pattern = "/")[[1]][3]
+  file_name.tmp2 <- substr(file_name.tmp1, 1, nchar(file_name.tmp1) -4)
+  file_name <- paste(file_name.tmp2, "adj_matrix_gephi.csv", sep = "_")
+
+  # 
+    rownames(Weavability_df)[k] <- paste("Random", k, sep = "")
+}
+colnames(Weavability_df) <- c("DBD_Class", "size_of_largest_connected_component", "Num_componenets")
+
+# Format
+Weavability_df$size_of_largest_connected_component <- as.numeric(Weavability_df$size_of_largest_connected_component)
+Weavability_df$Num_componenets <- as.numeric(Weavability_df$Num_componenets)
+Weavability_df$Weavability <- Weavability_df$size_of_largest_connected_component/Weavability_df$Num_componenets
+
+# write
+write.table(Weavability_df,
+            file = paste(paste(Working_dir, "Output_Files", sep = "/"), "Weavability_1000Random_DF.txt", sep = "/"),
+            col.names = TRUE, row.names = TRUE, quote = FALSE, sep = "\t")
+```
+
+
+
+# Does Weavability generalize across TF families? Run on TFs 
+```{r}
+############################## Does Weavability generalize across TF families?
+# Select how many top 8-mers?
+Top_HowMany_8mers <- 500
+
+# Specify the directory of data files
+Directory <- paste(Working_dir, "Input_Files/PBM_data_NetworkAnalysis_100TFs", sep = "/")
+
+# Add the PBM file locations of TFs to be analyzed
+Select_TF <- read.table(paste(Directory, "List_TFs_Weavability_Analysis.txt", sep = "/"), header = FALSE)$V1
+Select_TF <- substr(Select_TF, 2, nchar(Select_TF))
+
+# Loop over the files, create adjacency matrix, obtain the highest number of connected components and store in "Weavability_df"
+Weavability_df <- data.frame()
+for(k in 1:length(Select_TF))
+{
+    print(k)
+
+    # Read
+    Current_df <- read.table(paste0(Directory, Select_TF[k], ""), header = TRUE)
+    # Sort
+    Current_df <- Current_df[order(Current_df$E.score, decreasing = TRUE),]
+    # Select top 8-mers
+    strings_vector <- unique(c(Current_df$X8.mer[1:Top_HowMany_8mers], Current_df$X8.mer.RC[1:Top_HowMany_8mers]))
+
+    # Store e-score of k-mer 500
+    escore_500 <- Current_df[Top_HowMany_8mers, 3]
+
+  #################### Create Adjacency matrix
+  # Number of strings
+  n <- length(strings_vector)
+  # Create an empty adjacency matrix
+  adj_matrix <- matrix(0, n, n)
+  # Fill the upper triangle of the matrix
+  for (i in 1:n) {
+    for (j in 1:n) {
+      # Weavability
+      adj_matrix[i, j] <- compare_strings(strings_vector[i], strings_vector[j])
+    }
+  }
+  # Names
+  rownames(adj_matrix) <- strings_vector
+  colnames(adj_matrix) <- strings_vector
+
+  # Convert the adjacency matrix to an igraph object
+  graph_adjmat <- graph_from_adjacency_matrix(as.matrix(adj_matrix), mode = "directed", diag = FALSE, weighted=TRUE)
+
+  # Find the connected components
+  comp_connected <- components(graph_adjmat)
+
+  # Determine the size of the largest connected component
+  size_of_largest_connected_component <- max(comp_connected$csize)
+
+  # 
+  vec_to_add <- c(str_split(Select_TF[k], pattern = "/")[[1]][2], str_split(Select_TF[k], pattern = "/")[[1]][3], size_of_largest_connected_component, nrow(adj_matrix), escore_500)
+
+  # 
+  Weavability_df <- rbind(Weavability_df, vec_to_add)
+
+  #
+  file_name.tmp1 <- str_split(Select_TF[k], pattern = "/")[[1]][4]
+  file_name.tmp2 <- substr(file_name.tmp1, 1, nchar(file_name.tmp1) -4)
+  file_name <- paste(file_name.tmp2, "adj_matrix_gephi.csv", sep = "_")
+
+  # 
+  rownames(Weavability_df)[k] <- paste(str_split(Select_TF[k], pattern = "/")[[1]][3], str_split(file_name, pattern = "_")[[1]][1], sep = "_")
+
+ # write
+ write.table(Weavability_df,
+            file = paste(Working_dir, "Weavability_261TFs_DF.tmp.txt", sep = "/"),
+            col.names = TRUE, row.names = TRUE, quote = FALSE, sep = "\t")
+}
+colnames(Weavability_df) <- c("DBD_Class", "Species", "size_of_largest_connected_component", "Num_componenets", "E.score_500")
+
+# Format
+Weavability_df$size_of_largest_connected_component <- as.numeric(Weavability_df$size_of_largest_connected_component)
+Weavability_df$Num_componenets <- as.numeric(Weavability_df$Num_componenets)
+Weavability_df$Weavability <- Weavability_df$size_of_largest_connected_component/Weavability_df$Num_componenets
+
+# write
+write.table(Weavability_df, 
+            file = paste(paste(Working_dir, "Output_Files", sep = "/"), "Weavability_261TFs_DF.txt", sep = "/"),
+            col.names = TRUE, row.names = TRUE, quote = FALSE, sep = "\t")
+```
+
+
+# Analyze weavability
+```{r}
+escore_cutoff <- 0.35
+
+# Read
+Weavability_df_random <- read.table(paste(paste(Working_dir, "Output_Files", sep = "/"), "Weavability_1000Random_DF.txt", sep = "/"),header = TRUE)
+Weavability_df_TFs <- read.table(paste(paste(Working_dir, "Output_Files", sep = "/"), "Weavability_261TFs_DF.txt", sep = "/"),header = TRUE)
+
+# filter TFs
+Weavability_df_TFs <- Weavability_df_TFs[which(Weavability_df_TFs[,5] > escore_cutoff),]
+
+# 
+Weavability_df_TFs$Weavability <- Weavability_df_TFs[,3]/Weavability_df_TFs[,4]
+Weavability_df_TFs$DBD_Class <- Weavability_df_TFs[,1]
+
+# Combine
+Weavability_df <- rbind(Weavability_df_random[, c("DBD_Class", "Weavability")], 
+                        Weavability_df_TFs[, c("DBD_Class", "Weavability")])
+
+# Specify levels
+SpecifyOrder <- c("Random", "bZIP", "TBox", "NuclearReceptor", "bHLH", "C2H2", "HMG", "Forkhead", "ETS", "Homeodomain")
+Weavability_df <- Weavability_df[order(match(Weavability_df$DBD_Class, SpecifyOrder)),]
+Weavability_df$DBD_Class <- factor(Weavability_df$DBD_Class, 
+                                   levels = SpecifyOrder)
+
+# Boxplot
+boxplot(Weavability_df$Weavability ~ Weavability_df$DBD_Class, 
+        col = "red", notch = FALSE, outline = FALSE, las = 2)
+for(i in 1:length(SpecifyOrder))
+{
+  Weavability_df_subset <- Weavability_df[which(Weavability_df$DBD_Class %in% SpecifyOrder[i]),]
+  if(i == 1)
+  {
+    points(jitter(rep(i, nrow(Weavability_df_subset)), factor = 1), 
+           Weavability_df_subset$Weavability, pch = 19, cex = 0.2, col = "black")
+  }
+  if(SpecifyOrder[i] == "Homeodomain")
+  {
+    points(jitter(rep(i, nrow(Weavability_df_subset)), factor = 1), 
+           Weavability_df_subset$Weavability, pch = 19, cex = 1, col = "black")
+    next
+  }
+  if(i > 1 )
+  {
+    points(jitter(rep(i, nrow(Weavability_df_subset)), factor = 1), 
+           Weavability_df_subset$Weavability, pch = 19, cex = 1.5, col = "black")
+  }
+}
+
+# Histogram
+hist(Weavability_df$Weavability, 
+     breaks = 100, ylim = c(0, 100))
+
+# Number of TFs per class
+table(Weavability_df$DBD_Class)
+
+```
+

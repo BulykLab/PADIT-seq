@@ -1,0 +1,420 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+# Set Global Variables here
+
+```{r}
+# Please change the working directory
+Working_dir <- "~/Desktop/AVATAR/PADIT-seq-Manuscript/Code_Availability/"
+
+# Please be sure to install these libraries
+library(pheatmap); library(ggplot2); library(DESeq2); library(ggrepel); library("stringr"); library(viridis)
+
+# FDR cutoff (do not change)
+Cutoff_Value <- 0.05
+
+```
+
+# Important functions
+```{r}
+######################################################### Longest stretch of 1's
+Longest_1s <- function(vec) {
+  # Ensure that the vector contains only 0s and 1s
+  if (!all(vec %in% c(0, 1))) {
+    stop("The vector should contain only 0s and 1s")
+  }
+
+  # Use rle to compute the lengths of sequences of 1s and 0s
+  runs <- rle(vec)
+
+  # Extract the lengths of sequences of 1s only
+  lengths_of_ones <- runs$lengths[runs$values == 1]
+
+  # If there are no sequences of 1s, return a maximum length of 0 and start position as NA
+  if (length(lengths_of_ones) == 0) {
+    return(list(max_length = 0, start_position = NA))
+  }
+
+  # Identify the maximum length of the 1s sequences
+  max_length <- max(lengths_of_ones)
+
+  # Find the position (index) where the maximum stretch of 1s begins
+  start_positions_of_ones <- cumsum(runs$lengths) - runs$lengths + 1
+  start_position <- start_positions_of_ones[which(runs$lengths == max_length & runs$values == 1)[1]]
+
+  # Return the maximum length and start position as a list
+  return(list(max_length = max_length, start_position = start_position))
+}
+
+# Example usage:
+vec <- c(1, 1, 0, 1, 1, 1, 0, 0, 1, 1, 0, 1)
+result <- Longest_1s(vec)
+print(paste("Max length:", result$max_length, "| Start position:", result$start_position))
+
+######################################################### Plot heatmap
+plot_Heatmap <- function(Heatmap_DF_log2FC_rd_subset_subset, size)
+{
+  Heatmap_DF_log2FC_rd_subset_subset <- Heatmap_DF_log2FC_rd_subset_subset[which(apply(Heatmap_DF_log2FC_rd_subset_subset, 1, min) > -10), ]
+  sub_mat <- Heatmap_DF_log2FC_rd_subset_subset[, 5:(ncol(Heatmap_DF_log2FC_rd_subset_subset)-4)]
+  Heatmap_DF_log2FC_rd_subset_subset <- Heatmap_DF_log2FC_rd_subset_subset[order(apply(sub_mat, 1, sum), decreasing = TRUE), ]
+  pheatmap(Heatmap_DF_log2FC_rd_subset_subset, 
+         cluster_cols = FALSE, cluster_rows = FALSE, 
+         show_rownames = FALSE, show_colnames =  FALSE, scale = "none", 
+         color = inferno(100),
+         main = paste(size, "bps", sep = " ")) 
+}
+```
+
+
+# Read EGR1 9-mer PADIT-seq log2foldchange values for the 2 registers
+```{r}
+# Read
+Register_1_9 <- read.table(paste(paste(Working_dir, "Output_Files", sep = "/"), "ZIF268_all9mers_1_9_median.txt", sep = "/"), header = TRUE)
+Register_2_10 <- read.table(paste(paste(Working_dir, "Output_Files", sep = "/"), "ZIF268_all9mers_2_10_median.txt", sep = "/"), header = TRUE)
+
+# Re-define MPRAactivity
+Register_1_9$MPRAactivity <- (Register_1_9$log2FoldChange > 0 & Register_1_9$padj < Cutoff_Value)*1
+Register_2_10$MPRAactivity <- (Register_2_10$log2FoldChange > 0 & Register_2_10$padj < Cutoff_Value)*1
+
+# Format
+colnames(Register_1_9) <- paste(colnames(Register_1_9), "1_9", sep = "_")
+colnames(Register_2_10) <- paste(colnames(Register_2_10), "2_10", sep = "_")
+TEMP1 <- merge(Register_1_9, Register_2_10,
+               by.x = "X9.mer_1_9", by.y = "X9.mer_2_10")
+ZIF268_PBM_Escores_PADIT <- TEMP1; rm(TEMP1)
+ZIF268_PBM_Escores_PADIT$Mean_log2FC <- apply(ZIF268_PBM_Escores_PADIT[,c("log2FoldChange_1_9", "log2FoldChange_2_10")], 1, min)
+ZIF268_PBM_Escores_PADIT$MPRAactivity <- apply(ZIF268_PBM_Escores_PADIT[,c("MPRAactivity_1_9", "MPRAactivity_2_10")], 1, min)
+
+#
+df1 <- ZIF268_PBM_Escores_PADIT[,c("X9.mer_1_9", "Mean_log2FC", "MPRAactivity")]
+colnames(df1) <- c("TFBS", "log2FoldChange", "MPRAactivity")
+df2 <- ZIF268_PBM_Escores_PADIT[,c("X9.mer.1_1_9", "Mean_log2FC", "MPRAactivity")]
+colnames(df2) <- c("TFBS", "log2FoldChange", "MPRAactivity")
+dds_results_EGR1_df <- rbind(df1, df2)
+dds_results_EGR1_df$MPRAactivity[is.na(dds_results_EGR1_df$MPRAactivity)] <- 0
+
+```
+
+
+# Tile PADIT-seq EGR1 9-mers on ChIP-seq peaks
+```{r}
+# Read EGR1 CHIP-seq DNA sequences
+EGR1_CHIP <- read.table(paste(paste(Working_dir, "Input_Files/ChIP-seq_data_EGR1", sep = "/"), "GSE67482.EGR1.frontal-cortex.bed.fa.txt", sep = "/"), header = FALSE)
+colnames(EGR1_CHIP) <- c("V1")
+
+# Obtain tiling
+numPeaks <- nrow(EGR1_CHIP)
+Heatmap_DF_log2FC <- list()
+Heatmap_DF_MPRAactivity <- list()
+for(i in 1:numPeaks)
+{
+  CurrentPeak <- toupper(EGR1_CHIP$V1[i])
+  Sequence_10mers_DF <- data.frame()
+  for(j in 1:(nchar(CurrentPeak)-8))
+  {
+    Sequence_10mers_DF[j, 1] <- substr(CurrentPeak, j, j+8)
+  }
+  dds_results_EGR1_df_subset <- dds_results_EGR1_df[which(dds_results_EGR1_df$TFBS %in% Sequence_10mers_DF$V1),]
+  dds_results_EGR1_df_subset <- dds_results_EGR1_df_subset[match(Sequence_10mers_DF$V1, dds_results_EGR1_df_subset$TFBS),]
+  Heatmap_DF_log2FC <- c(Heatmap_DF_log2FC, list(dds_results_EGR1_df_subset$log2FoldChange))
+  Heatmap_DF_MPRAactivity <- c(Heatmap_DF_MPRAactivity, list(dds_results_EGR1_df_subset$MPRAactivity))
+}
+
+# Write
+saveRDS(Heatmap_DF_log2FC, file=paste(paste(Working_dir, "Output_Files", sep = "/"), "log2FC_9bpstiling_EGR1_peaks_FDR_0.05.RData", sep = "/"))
+saveRDS(Heatmap_DF_MPRAactivity, file=paste(paste(Working_dir, "Output_Files", sep = "/"), "MPRAactivity_9bpstiling_EGR1_peaks_FDR_0.05.RData", sep = "/"))
+rm(EGR1_CHIP)
+
+```
+
+
+# Tile PADIT-seq k-mers on background sequences from Homer
+```{r}
+# Read EGR1 CHIP-seq DNA sequences
+EGR1_CHIP_OG <- read.table(paste(paste(Working_dir, "Input_Files/ChIP-seq_data_EGR1", sep = "/"), "GSE67482.EGR1.frontal-cortex.bed.fa.txt", sep = "/"), header = FALSE)
+
+# Read EGR1 CHIP-seq DNA sequences
+EGR1_CHIP <- read.table(paste(paste(Working_dir, "Input_Files/ChIP-seq_data_EGR1", sep = "/"), "seq.tsv", sep = "/"), header = FALSE)
+EGR1_CHIP <- EGR1_CHIP[which(! EGR1_CHIP$V2 %in% EGR1_CHIP_OG$V1),]
+EGR1_CHIP <- EGR1_CHIP[which(EGR1_CHIP$V1 %in% c(paste(1:11397, "local+1", sep = "-")) ), ]
+colnames(EGR1_CHIP) <- c("V2", "V1")
+
+# Obtain tiling
+numPeaks <- nrow(EGR1_CHIP)
+Heatmap_DF_log2FC <- list()
+Heatmap_DF_MPRAactivity <- list()
+for(i in 1:numPeaks)
+{
+  CurrentPeak <- toupper(EGR1_CHIP$V1[i])
+  Sequence_10mers_DF <- data.frame()
+  for(j in 1:(nchar(CurrentPeak)-8))
+  {
+    Sequence_10mers_DF[j, 1] <- substr(CurrentPeak, j, j+8)
+  }
+  dds_results_EGR1_df_subset <- dds_results_EGR1_df[which(dds_results_EGR1_df$TFBS %in% Sequence_10mers_DF$V1),]
+  dds_results_EGR1_df_subset <- dds_results_EGR1_df_subset[match(Sequence_10mers_DF$V1, dds_results_EGR1_df_subset$TFBS),]
+  Heatmap_DF_log2FC <- c(Heatmap_DF_log2FC, list(dds_results_EGR1_df_subset$log2FoldChange))
+  Heatmap_DF_MPRAactivity <- c(Heatmap_DF_MPRAactivity, list(dds_results_EGR1_df_subset$MPRAactivity))
+}
+
+# Write
+saveRDS(Heatmap_DF_log2FC, file=paste(paste(Working_dir, "Output_Files", sep = "/"), "log2FC_9bpstiling_EGR1_peaks_HomerBG_FDR_0.05.RData", sep = "/"))
+saveRDS(Heatmap_DF_MPRAactivity, file=paste(paste(Working_dir, "Output_Files", sep = "/"), "MPRAactivity_9bpstiling_EGR1_peaks_HomerBG_FDR_0.05.RData", sep = "/"))
+rm(EGR1_CHIP)
+
+```
+
+
+# Tile PADIT-seq k-mers on shuffled peaks (bedtools)
+```{r}
+# Read EGR1 CHIP-seq DNA sequences
+EGR1_CHIP <- read.table(paste(paste(Working_dir, "Input_Files/ChIP-seq_data_EGR1", sep = "/"), "GSE67482.EGR1.frontal-cortex_shuffled1.bed.fa.txt", sep = "/"), header = FALSE)
+colnames(EGR1_CHIP) <- c("V1")
+
+# Obtain tiling
+numPeaks <- nrow(EGR1_CHIP)
+Heatmap_DF_log2FC <- list()
+Heatmap_DF_MPRAactivity <- list()
+for(i in 1:numPeaks)
+{
+  CurrentPeak <- toupper(EGR1_CHIP$V1[i])
+  Sequence_10mers_DF <- data.frame()
+  for(j in 1:(nchar(CurrentPeak)-8))
+  {
+    Sequence_10mers_DF[j, 1] <- substr(CurrentPeak, j, j+8)
+  }
+  dds_results_EGR1_df_subset <- dds_results_EGR1_df[which(dds_results_EGR1_df$TFBS %in% Sequence_10mers_DF$V1),]
+  dds_results_EGR1_df_subset <- dds_results_EGR1_df_subset[match(Sequence_10mers_DF$V1, dds_results_EGR1_df_subset$TFBS),]
+  Heatmap_DF_log2FC <- c(Heatmap_DF_log2FC, list(dds_results_EGR1_df_subset$log2FoldChange))
+  Heatmap_DF_MPRAactivity <- c(Heatmap_DF_MPRAactivity, list(dds_results_EGR1_df_subset$MPRAactivity))
+}
+
+# Write
+saveRDS(Heatmap_DF_log2FC, file=paste(paste(Working_dir, "Output_Files", sep = "/"), "log2FC_9bpstiling_EGR1_peaks_shuffled1_FDR_0.05.RData", sep = "/"))
+saveRDS(Heatmap_DF_MPRAactivity, file=paste(paste(Working_dir, "Output_Files", sep = "/"), "MPRAactivity_9bpstiling_EGR1_peaks_shuffled1_FDR_0.05.RData", sep = "/"))
+rm(EGR1_CHIP)
+
+```
+
+
+# Tile PADIT-seq HOXD13 8-mers on shuffled peaks (bedtools)
+```{r}
+# Read EGR1 CHIP-seq DNA sequences
+EGR1_CHIP <- read.table(paste(paste(Working_dir, "Input_Files/ChIP-seq_data_EGR1", sep = "/"), "GSE67482.EGR1.frontal-cortex_shuffled2.bed.fa.txt", sep = "/"), header = FALSE)
+colnames(EGR1_CHIP) <- c("V1")
+
+# Obtain tiling
+numPeaks <- nrow(EGR1_CHIP)
+Heatmap_DF_log2FC <- list()
+Heatmap_DF_MPRAactivity <- list()
+for(i in 1:numPeaks)
+{
+  CurrentPeak <- toupper(EGR1_CHIP$V1[i])
+  Sequence_10mers_DF <- data.frame()
+  for(j in 1:(nchar(CurrentPeak)-8))
+  {
+    Sequence_10mers_DF[j, 1] <- substr(CurrentPeak, j, j+8)
+  }
+  dds_results_EGR1_df_subset <- dds_results_EGR1_df[which(dds_results_EGR1_df$TFBS %in% Sequence_10mers_DF$V1),]
+  dds_results_EGR1_df_subset <- dds_results_EGR1_df_subset[match(Sequence_10mers_DF$V1, dds_results_EGR1_df_subset$TFBS),]
+  Heatmap_DF_log2FC <- c(Heatmap_DF_log2FC, list(dds_results_EGR1_df_subset$log2FoldChange))
+  Heatmap_DF_MPRAactivity <- c(Heatmap_DF_MPRAactivity, list(dds_results_EGR1_df_subset$MPRAactivity))
+}
+
+# Write
+saveRDS(Heatmap_DF_log2FC, file=paste(paste(Working_dir, "Output_Files", sep = "/"), "log2FC_9bpstiling_EGR1_peaks_shuffled2_FDR_0.05.RData", sep = "/"))
+saveRDS(Heatmap_DF_MPRAactivity, file=paste(paste(Working_dir, "Output_Files", sep = "/"), "MPRAactivity_9bpstiling_EGR1_peaks_shuffled2_FDR_0.05.RData", sep = "/"))
+rm(EGR1_CHIP)
+
+```
+
+
+# EGR1 ChIP-seq peaks contain longer stretches of consecutively active EGR1 9-mers
+```{r}
+# Read log2FC tiling
+log2FC_peaks <- readRDS(paste(paste(Working_dir, "Output_Files", sep = "/"), "log2FC_9bpstiling_EGR1_peaks_FDR_0.05.RData", sep = "/"))
+log2FC_HomerBG <- readRDS(paste(paste(Working_dir, "Output_Files", sep = "/"), "log2FC_9bpstiling_EGR1_peaks_HomerBG_FDR_0.05.RData", sep = "/"))
+log2FC_Shuffled1 <- readRDS(paste(paste(Working_dir, "Output_Files", sep = "/"), "log2FC_9bpstiling_EGR1_peaks_shuffled1_FDR_0.05.RData", sep = "/"))
+log2FC_Shuffled2 <- readRDS(paste(paste(Working_dir, "Output_Files", sep = "/"), "log2FC_9bpstiling_EGR1_peaks_shuffled2_FDR_0.05.RData", sep = "/"))
+
+# Read MPRAactivity tiling
+MPRAactivity_peaks <- readRDS(paste(paste(Working_dir, "Output_Files", sep = "/"), "MPRAactivity_9bpstiling_EGR1_peaks_FDR_0.05.RData", sep = "/"))
+MPRAactivity_HomerBG <- readRDS(paste(paste(Working_dir, "Output_Files", sep = "/"), "MPRAactivity_9bpstiling_EGR1_peaks_HomerBG_FDR_0.05.RData", sep = "/"))
+MPRAactivity_HomerBG <- rapply(MPRAactivity_HomerBG, f=function(x) ifelse(is.na(x),0,x), how="replace" )
+MPRAactivity_Shuffled1 <- readRDS(paste(paste(Working_dir, "Output_Files", sep = "/"), "MPRAactivity_9bpstiling_EGR1_peaks_shuffled1_FDR_0.05.RData", sep = "/"))
+MPRAactivity_Shuffled2 <- readRDS(paste(paste(Working_dir, "Output_Files", sep = "/"), "MPRAactivity_9bpstiling_EGR1_peaks_shuffled2_FDR_0.05.RData", sep = "/"))
+
+######################################################### Longest 1's
+# Longest 1's per peak
+longest1s_perPeak <- sapply(MPRAactivity_peaks, function(col) Longest_1s(col)$max_length)
+longest1s_perPeak_Shuffled_random <- sapply(MPRAactivity_HomerBG, function(col) Longest_1s(col)$max_length)
+longest1s_perPeak_Shuffled_random1 <- sapply(MPRAactivity_Shuffled1, function(col) Longest_1s(col)$max_length)
+longest1s_perPeak_Shuffled_random2 <- sapply(MPRAactivity_Shuffled2, function(col) Longest_1s(col)$max_length)
+
+# Longest 1's per peak
+# longest1s_perPeak <- (longest1s_perPeak+8)*((longest1s_perPeak != 0)*1)
+# longest1s_perPeak_Shuffled_random <- (longest1s_perPeak_Shuffled_random+8)*((longest1s_perPeak_Shuffled_random != 0)*1)
+
+# Histogram (longest 1's of MPRAactivity)
+hist(longest1s_perPeak_Shuffled_random, breaks = 10, prob = FALSE, col = "black", ylim = c(0, 9000),
+     xlim = c(0, 10), xlab = "Number of 9-mers with PADIT-seq activity",
+     main = "Background = Local")
+hist(longest1s_perPeak, breaks = 20, prob = FALSE, col = "red",
+     xlim = c(0, 10), add = TRUE)
+
+# Histogram (longest 1's of MPRAactivity)
+hist(longest1s_perPeak_Shuffled_random1, breaks = 10, prob = FALSE, col = "black", ylim = c(0, 9000),
+     xlim = c(0, 10), xlab = "Number of 9-mers with PADIT-seq activity", 
+     main = "Background = Random length-matched genomic interval")
+hist(longest1s_perPeak, breaks = 20, prob = FALSE, col = "red",
+     xlim = c(0, 10), add = TRUE)
+
+# 
+table(longest1s_perPeak > 2)
+
+# Wilcoxon test
+wilcox.test(longest1s_perPeak_Shuffled_random, longest1s_perPeak_Shuffled_random2)
+wilcox.test(longest1s_perPeak, longest1s_perPeak_Shuffled_random)
+```
+
+
+# Heatmap of consecutively active 9-mers
+```{r}
+# Read ChIP-seq peaks with DNA sequence
+EGR1_CHIP <- read.table(paste(paste(Working_dir, "Input_Files/ChIP-seq_data_EGR1", sep = "/"), "GSE67482.EGR1.frontal-cortex.bed.fa2.0.txt", sep = "/"))
+EGR1_CHIP <- EGR1_CHIP[complete.cases(EGR1_CHIP), ]
+colnames(EGR1_CHIP) <- c("chr", "start", "end", "DNA")
+
+#########################################################
+# Obtain tiling
+numPeaks <- nrow(EGR1_CHIP)
+DF3 <- data.frame()
+DF4 <- data.frame()
+DF5 <- data.frame()
+for(i in 1:numPeaks)
+{
+  CurrentPeak <- toupper(EGR1_CHIP$DNA[i])
+  Sequence_10mers_DF <- data.frame()
+  for(j in 1:(nchar(CurrentPeak)-8))
+  {
+    Sequence_10mers_DF[j, 1] <- substr(CurrentPeak, j, j+8)
+  }
+  dds_results_EGR1_df_subset <- dds_results_EGR1_df[which(dds_results_EGR1_df$TFBS %in% Sequence_10mers_DF$V1),]
+  dds_results_EGR1_df_subset <- dds_results_EGR1_df_subset[match(Sequence_10mers_DF$V1, dds_results_EGR1_df_subset$TFBS),]
+  Longest_1s_results <- Longest_1s(dds_results_EGR1_df_subset$MPRAactivity)
+  if(Longest_1s_results$max_length == 3 & Longest_1s_results$start_position > 4 & (Longest_1s_results$start_position + 14) < nrow(dds_results_EGR1_df_subset))
+  {
+    log2FC <- dds_results_EGR1_df_subset$log2FoldChange[(Longest_1s_results$start_position-4):(Longest_1s_results$start_position+6)]
+    DF3[i, 1] <- EGR1_CHIP[i, 1]
+    DF3[i, 2] <- EGR1_CHIP[i, 2] + (Longest_1s_results$start_position - 3) - 1
+    DF3[i, 3] <- EGR1_CHIP[i, 2] + (Longest_1s_results$start_position + 10 + 3)
+    DF3[i, 4] <- substr(EGR1_CHIP$DNA[i], (Longest_1s_results$start_position-4), (Longest_1s_results$start_position+14))
+    DF3[i, 5:15] <- as.numeric(log2FC)
+  }
+  if(Longest_1s_results$max_length == 4 & Longest_1s_results$start_position > 4 & (Longest_1s_results$start_position + 15) < nrow(dds_results_EGR1_df_subset))
+  {
+    log2FC <- dds_results_EGR1_df_subset$log2FoldChange[(Longest_1s_results$start_position-4):(Longest_1s_results$start_position+7)]
+    DF4[i, 1] <- EGR1_CHIP[i, 1]
+    DF4[i, 2] <- EGR1_CHIP[i, 2] + (Longest_1s_results$start_position - 3) - 1
+    DF4[i, 3] <- EGR1_CHIP[i, 2] + (Longest_1s_results$start_position + 11 + 3)
+    DF4[i, 4] <- substr(EGR1_CHIP$DNA[i], (Longest_1s_results$start_position-4), (Longest_1s_results$start_position+15))
+    DF4[i, 5:16] <- as.numeric(log2FC)
+  }
+  if(Longest_1s_results$max_length == 5 & Longest_1s_results$start_position > 4 & (Longest_1s_results$start_position + 16) < nrow(dds_results_EGR1_df_subset))
+  {
+    log2FC <- dds_results_EGR1_df_subset$log2FoldChange[(Longest_1s_results$start_position-4):(Longest_1s_results$start_position+8)]
+    DF5[i, 1] <- EGR1_CHIP[i, 1]
+    DF5[i, 2] <- EGR1_CHIP[i, 2] + (Longest_1s_results$start_position - 3) - 1
+    DF5[i, 3] <- EGR1_CHIP[i, 2] + (Longest_1s_results$start_position + 12 + 3)
+    DF5[i, 4] <- substr(EGR1_CHIP$DNA[i], (Longest_1s_results$start_position-4), (Longest_1s_results$start_position+16))
+    DF5[i, 5:17] <- as.numeric(log2FC)
+  }
+}
+DF3 <- DF3[complete.cases(DF3), ]
+DF4 <- DF4[complete.cases(DF4), ]
+DF5 <- DF5[complete.cases(DF5), ]
+
+######################################################### Plot heatmaps
+# Heatmap (log2FC) 3 consecutive
+plot_Heatmap(data.matrix(DF3[, 5:ncol(DF3)]), "11")
+
+# Heatmap (log2FC) 4 consecutive
+plot_Heatmap(data.matrix(DF4[, 5:ncol(DF4)]), "12")
+
+# Heatmap (log2FC) 5 consecutive
+plot_Heatmap(data.matrix(DF5[, 5:ncol(DF5)]), "13")
+
+#################################################################
+# 3 consecutive
+plot(1:ncol(DF3[, 5:ncol(DF3)]), 
+     apply(DF3[, 5:ncol(DF3)], 2, mean), 
+     pch = 19, type = "b", cex = 2, 
+     col = c(rep("black", times = 4), rep("red", times = 3), rep("black", times = 4)))
+
+# 4 consecutive
+plot(1:ncol(DF4[, 5:ncol(DF4)]), 
+     apply(DF4[, 5:ncol(DF4)], 2, mean), 
+     pch = 19, type = "b", cex = 2, 
+     col = c(rep("black", times = 4), rep("red", times = 4), rep("black", times = 4)))
+
+# 5 consecutive
+plot(1:ncol(DF5[, 5:ncol(DF5)]), 
+     apply(DF5[, 5:ncol(DF5)], 2, mean), 
+     pch = 19, type = "b", cex = 2, 
+     col = c(rep("black", times = 4), rep("red", times = 5), rep("black", times = 4)))
+
+######################################################### Write files to map PhastCons conservation scores
+write.table(DF3, file = paste(paste(Working_dir, "Output_Files", sep = "/"), "GSE67482.EGR1.frontal-cortex.bed.fa2.0_3consecutive9mers_and4bpsFlank_log2FC.bed", sep = "/"), col.names = FALSE, row.names = FALSE, quote = FALSE, sep = "\t")
+write.table(DF4, file = paste(paste(Working_dir, "Output_Files", sep = "/"), "GSE67482.EGR1.frontal-cortex.bed.fa2.0_4consecutive9mers_and4bpsFlank_log2FC.bed", sep = "/"), col.names = FALSE, row.names = FALSE, quote = FALSE, sep = "\t")
+write.table(DF5, file = paste(paste(Working_dir, "Output_Files", sep = "/"), "GSE67482.EGR1.frontal-cortex.bed.fa2.0_5consecutive9mers_and4bpsFlank_log2FC.bed", sep = "/"), col.names = FALSE, row.names = FALSE, quote = FALSE, sep = "\t")
+
+```
+
+# Generate logos
+```{r}
+library(seqLogo)
+
+# Function to generate PWM logo for any specified k-mers
+Generate_PWM_seqlogo <- function(kmers_vec, kmer_length = 8)
+{
+  # Generate data frame for seqlogo
+  kmers_vec_df <- data.frame()
+  for(i in 1:kmer_length)
+  {
+    letter_i <- substr(kmers_vec, i, i)
+    count <- 0
+    for(j in c("A", "C", "G", "T"))
+    {
+      count <- count + 1
+      kmers_vec_df[i, count] <- sum(letter_i == j)
+    }
+  }
+  colnames(kmers_vec_df) <- c("A", "C", "G", "T")
+  
+  #define function that divides the frequency by the row sum i.e. proportions
+  proportion <- function(x){
+     rs <- sum(x);
+     return(x / rs);
+  }
+   
+  #create position weight matrix
+  HOXD13_seqlogo <- apply(kmers_vec_df, 1, proportion)
+  HOXD13_seqlogo <- makePWM(HOXD13_seqlogo)
+  seqLogo(HOXD13_seqlogo, ic.scale = TRUE)
+}
+
+# 
+DF3 <-  read.table(paste(paste(Working_dir, "Output_Files", sep = "/"), "GSE67482.EGR1.frontal-cortex.bed.fa2.0_3consecutive9mers_and4bpsFlank_log2FC.bed", sep = "/"), header = FALSE)
+Generate_PWM_seqlogo(substr(DF3$V4, 2, 18), 17)
+
+# 
+DF4 <-  read.table(paste(paste(Working_dir, "Output_Files", sep = "/"), "GSE67482.EGR1.frontal-cortex.bed.fa2.0_4consecutive9mers_and4bpsFlank_log2FC.bed", sep = "/"), header = FALSE)
+Generate_PWM_seqlogo(substr(DF4$V4, 2, 19), 18)
+
+# 
+DF5 <-  read.table(paste(paste(Working_dir, "Output_Files", sep = "/"), "GSE67482.EGR1.frontal-cortex.bed.fa2.0_5consecutive9mers_and4bpsFlank_log2FC.bed", sep = "/"), header = FALSE)
+Generate_PWM_seqlogo(substr(DF5$V4, 2, 20), 19)
+
+```
+

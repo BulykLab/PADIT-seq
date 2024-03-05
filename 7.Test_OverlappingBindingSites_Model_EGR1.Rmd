@@ -1,0 +1,529 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+
+# Set Global Variables here
+
+```{r}
+# Please change the working directory
+Working_dir <- "~/Desktop/AVATAR/PADIT-seq-Manuscript/Code_Availability/"
+
+# Please be sure to install these libraries
+library(pheatmap); library(ggplot2); library(DESeq2); library(ggrepel); library("stringr"); library(viridis)
+
+# FDR cutoff (do not change)
+Cutoff_Value <- 0.05
+```
+
+# Important functions
+```{r}
+######################################################### Longest stretch of 1's
+Longest_1s <- function(vec) {
+  # Ensure that the vector contains only 0s and 1s
+  if (!all(vec %in% c(0, 1))) {
+    stop("The vector should contain only 0s and 1s")
+  }
+
+  # Use rle to compute the lengths of sequences of 1s and 0s
+  runs <- rle(vec)
+
+  # Extract the lengths of sequences of 1s only
+  lengths_of_ones <- runs$lengths[runs$values == 1]
+
+  # If there are no sequences of 1s, return a maximum length of 0 and start position as NA
+  if (length(lengths_of_ones) == 0) {
+    return(list(max_length = 0, start_position = NA))
+  }
+
+  # Identify the maximum length of the 1s sequences
+  max_length <- max(lengths_of_ones)
+
+  # Find the position (index) where the maximum stretch of 1s begins
+  start_positions_of_ones <- cumsum(runs$lengths) - runs$lengths + 1
+  start_position <- start_positions_of_ones[which(runs$lengths == max_length & runs$values == 1)[1]]
+
+  # Return the maximum length and start position as a list
+  return(list(max_length = max_length, start_position = start_position))
+}
+
+# Example usage:
+vec <- c(1, 1, 0, 1, 1, 1, 0, 0, 1, 1, 0, 1)
+result <- Longest_1s(vec)
+print(paste("Max length:", result$max_length, "| Start position:", result$start_position))
+
+```
+
+
+# Read EGR1 9-mer PADIT-seq log2foldchange values for the 2 registers
+```{r}
+# Read
+Register_1_9 <- read.table(paste(paste(Working_dir, "Output_Files", sep = "/"), "ZIF268_all9mers_1_9_median.txt", sep = "/"), header = TRUE)
+Register_2_10 <- read.table(paste(paste(Working_dir, "Output_Files", sep = "/"), "ZIF268_all9mers_2_10_median.txt", sep = "/"), header = TRUE)
+
+# Re-define MPRAactivity
+Register_1_9$MPRAactivity <- (Register_1_9$log2FoldChange > 0 & Register_1_9$padj < Cutoff_Value)*1
+Register_2_10$MPRAactivity <- (Register_2_10$log2FoldChange > 0 & Register_2_10$padj < Cutoff_Value)*1
+
+# Format
+colnames(Register_1_9) <- paste(colnames(Register_1_9), "1_9", sep = "_")
+colnames(Register_2_10) <- paste(colnames(Register_2_10), "2_10", sep = "_")
+TEMP1 <- merge(Register_1_9, Register_2_10,
+               by.x = "X9.mer_1_9", by.y = "X9.mer_2_10")
+ZIF268_PBM_Escores_PADIT <- TEMP1; rm(TEMP1)
+ZIF268_PBM_Escores_PADIT$Mean_log2FC <- apply(ZIF268_PBM_Escores_PADIT[,c("log2FoldChange_1_9", "log2FoldChange_2_10")], 1, min)
+ZIF268_PBM_Escores_PADIT$MPRAactivity <- apply(ZIF268_PBM_Escores_PADIT[,c("MPRAactivity_1_9", "MPRAactivity_2_10")], 1, min)
+
+#
+df1 <- ZIF268_PBM_Escores_PADIT[,c("X9.mer_1_9", "Mean_log2FC", "MPRAactivity")]
+colnames(df1) <- c("TFBS", "log2FoldChange", "MPRAactivity")
+df2 <- ZIF268_PBM_Escores_PADIT[,c("X9.mer.1_1_9", "Mean_log2FC", "MPRAactivity")]
+colnames(df2) <- c("TFBS", "log2FoldChange", "MPRAactivity")
+dds_results_EGR1_df <- rbind(df1, df2)
+dds_results_EGR1_df$MPRAactivity[is.na(dds_results_EGR1_df$MPRAactivity)] <- 0
+
+```
+
+
+# Tile PADIT-seq EGR1 9-mers on HT-SELEX reads
+```{r}
+for(Select_cycle in c("input", "cycle1", "cycle2", "cycle3", "cycle4"))
+{
+  # Read EGR1 SELEX-seq DNA sequences
+  if(Select_cycle == "input")
+  {
+    EGR1_CHIP_tmp <- unique(read.table(paste(paste(Working_dir, "Input_Files/HT-SELEX_data_EGR1", sep = "/"), "ZeroCycle_TCTCTT20NGA_0_0.fastq.txt", sep = "/"), header = FALSE))
+  }
+  if(Select_cycle == "cycle1")
+  {
+    EGR1_CHIP_tmp <- unique(read.table(paste(paste(Working_dir, "Input_Files/HT-SELEX_data_EGR1", sep = "/"), "EGR1_TCTCTT20NGA_Y_1.fastq.txt", sep = "/"), header = FALSE))
+  }
+  if(Select_cycle == "cycle2")
+  {
+    EGR1_CHIP_tmp <- unique(read.table(paste(paste(Working_dir, "Input_Files/HT-SELEX_data_EGR1", sep = "/"), "EGR1_TCTCTT20NGA_Y_2.fastq.txt", sep = "/"), header = FALSE))
+  }
+  if(Select_cycle == "cycle3")
+  {
+    EGR1_CHIP_tmp <- unique(read.table(paste(paste(Working_dir, "Input_Files/HT-SELEX_data_EGR1", sep = "/"), "EGR1_TCTCTT20NGA_Y_3.fastq.txt", sep = "/"), header = FALSE))
+  }
+  if(Select_cycle == "cycle4")
+  {
+    EGR1_CHIP_tmp <- unique(read.table(paste(paste(Working_dir, "Input_Files/HT-SELEX_data_EGR1", sep = "/"), "EGR1_TCTCTT20NGA_Y_4.fastq.txt", sep = "/"), header = FALSE))
+  }
+  
+  #
+  EGR1_CHIP <- as.data.frame(EGR1_CHIP_tmp[sample(1:nrow(EGR1_CHIP_tmp), 10000), ])
+  colnames(EGR1_CHIP) <- c("V1")
+  
+  # Obtain tiling
+  numPeaks <- nrow(EGR1_CHIP)
+  Heatmap_DF_log2FC <- matrix(0, nrow = numPeaks, ncol = 12)
+  Heatmap_DF_MPRAactivity <- matrix(0, nrow = numPeaks, ncol = 12)
+  for(i in 1:numPeaks)
+  {
+   CurrentPeak <- toupper(EGR1_CHIP$V1[i])
+   Sequence_10mers_DF <- data.frame()
+   for(j in 1:12)
+   {
+     Sequence_10mers_DF[j, 1] <- substr(CurrentPeak, j, j+8)
+   }
+   dds_results_EGR1_df_subset <- dds_results_EGR1_df[which(dds_results_EGR1_df$TFBS %in% Sequence_10mers_DF$V1),]
+   dds_results_EGR1_df_subset <- dds_results_EGR1_df_subset[match(Sequence_10mers_DF$V1, dds_results_EGR1_df_subset$TFBS),]
+   Heatmap_DF_log2FC[i,] <- dds_results_EGR1_df_subset$log2FoldChange
+   Heatmap_DF_MPRAactivity[i,] <- dds_results_EGR1_df_subset$MPRAactivity
+  }
+  
+  # Write
+  if(Select_cycle == "input")
+  {
+    write.table(Heatmap_DF_log2FC, file = paste(paste(Working_dir, "Output_Files", sep = "/"), "Heatmap_DF_log2FC_9bpstiling_EGR1_SELEX_input.txt", sep = "/"), col.names = FALSE, row.names = FALSE, quote = FALSE, sep = "\t")
+    write.table(Heatmap_DF_MPRAactivity, file = paste(paste(Working_dir, "Output_Files", sep = "/"), "Heatmap_DF_MPRAactivity_9bpstiling_EGR1_SELEX_input.txt", sep = "/"), col.names = FALSE, row.names = FALSE, quote = FALSE, sep = "\t")
+  }
+  if(Select_cycle == "cycle1")
+  {
+    write.table(Heatmap_DF_log2FC, file = paste(paste(Working_dir, "Output_Files", sep = "/"), "Heatmap_DF_log2FC_9bpstiling_EGR1_HT-SELEX_cycle1.txt", sep = "/"), col.names = FALSE, row.names = FALSE, quote = FALSE, sep = "\t")
+    write.table(Heatmap_DF_MPRAactivity, file = paste(paste(Working_dir, "Output_Files", sep = "/"), "Heatmap_DF_MPRAactivity_9bpstiling_EGR1_HT-SELEX_cycle1.txt", sep = "/"), col.names = FALSE, row.names = FALSE, quote = FALSE, sep = "\t")
+  }
+  if(Select_cycle == "cycle2")
+  {
+    write.table(Heatmap_DF_log2FC, file = paste(paste(Working_dir, "Output_Files", sep = "/"), "Heatmap_DF_log2FC_9bpstiling_EGR1_HT-SELEX_cycle2.txt", sep = "/"), col.names = FALSE, row.names = FALSE, quote = FALSE, sep = "\t")
+    write.table(Heatmap_DF_MPRAactivity, file = paste(paste(Working_dir, "Output_Files", sep = "/"), "Heatmap_DF_MPRAactivity_9bpstiling_EGR1_HT-SELEX_cycle2.txt", sep = "/"), col.names = FALSE, row.names = FALSE, quote = FALSE, sep = "\t")
+  }
+  if(Select_cycle == "cycle3")
+  {
+    write.table(Heatmap_DF_log2FC, file = paste(paste(Working_dir, "Output_Files", sep = "/"), "Heatmap_DF_log2FC_9bpstiling_EGR1_HT-SELEX_cycle3.txt", sep = "/"), col.names = FALSE, row.names = FALSE, quote = FALSE, sep = "\t")
+    write.table(Heatmap_DF_MPRAactivity, file = paste(paste(Working_dir, "Output_Files", sep = "/"), "Heatmap_DF_MPRAactivity_9bpstiling_EGR1_HT-SELEX_cycle3.txt", sep = "/"), col.names = FALSE, row.names = FALSE, quote = FALSE, sep = "\t")
+  }
+  if(Select_cycle == "cycle4")
+  {
+    write.table(Heatmap_DF_log2FC, file = paste(paste(Working_dir, "Output_Files", sep = "/"), "Heatmap_DF_log2FC_9bpstiling_EGR1_HT-SELEX_cycle4.txt", sep = "/"), col.names = FALSE, row.names = FALSE, quote = FALSE, sep = "\t")
+    write.table(Heatmap_DF_MPRAactivity, file = paste(paste(Working_dir, "Output_Files", sep = "/"), "Heatmap_DF_MPRAactivity_9bpstiling_EGR1_HT-SELEX_cycle4.txt", sep = "/"), col.names = FALSE, row.names = FALSE, quote = FALSE, sep = "\t")
+  }
+}
+
+```
+
+
+# Create stacked histogram (HT-SELEX)
+```{r}
+######################################################### Read files with tiled scores
+# Input
+Heatmap_DF_log2FC_input <- read.table(paste(paste(Working_dir, "Output_Files", sep = "/"), "Heatmap_DF_log2FC_9bpstiling_EGR1_SELEX_input.txt", sep = "/"))
+Heatmap_DF_MPRAactivity_input <- read.table(paste(paste(Working_dir, "Output_Files", sep = "/"), "Heatmap_DF_MPRAactivity_9bpstiling_EGR1_SELEX_input.txt", sep = "/"))
+Heatmap_DF_MPRAactivity_input[is.na(Heatmap_DF_MPRAactivity_input)] <- 0
+Heatmap_DF_MPRAactivity_input[] <- lapply(Heatmap_DF_MPRAactivity_input, function(col) replace(col, col == -1, 0))
+
+# Cycle-1
+Heatmap_DF_log2FC_cycle1 <- read.table(paste(paste(Working_dir, "Output_Files", sep = "/"), "Heatmap_DF_log2FC_9bpstiling_EGR1_HT-SELEX_cycle1.txt", sep = "/"))
+Heatmap_DF_MPRAactivity_cycle1 <- read.table(paste(paste(Working_dir, "Output_Files", sep = "/"), "Heatmap_DF_MPRAactivity_9bpstiling_EGR1_HT-SELEX_cycle1.txt", sep = "/"))
+Heatmap_DF_MPRAactivity_cycle1[is.na(Heatmap_DF_MPRAactivity_cycle1)] <- 0
+Heatmap_DF_MPRAactivity_cycle1[] <- lapply(Heatmap_DF_MPRAactivity_cycle1, function(col) replace(col, col == -1, 0))
+
+# Cycle-2
+Heatmap_DF_log2FC_cycle2 <- read.table(paste(paste(Working_dir, "Output_Files", sep = "/"), "Heatmap_DF_log2FC_9bpstiling_EGR1_HT-SELEX_cycle2.txt", sep = "/"))
+Heatmap_DF_MPRAactivity_cycle2 <- read.table(paste(paste(Working_dir, "Output_Files", sep = "/"), "Heatmap_DF_MPRAactivity_9bpstiling_EGR1_HT-SELEX_cycle2.txt", sep = "/"))
+Heatmap_DF_MPRAactivity_cycle2[is.na(Heatmap_DF_MPRAactivity_cycle2)] <- 0
+Heatmap_DF_MPRAactivity_cycle2[] <- lapply(Heatmap_DF_MPRAactivity_cycle2, function(col) replace(col, col == -1, 0))
+
+# Cycle-3
+Heatmap_DF_log2FC_cycle3 <- read.table(paste(paste(Working_dir, "Output_Files", sep = "/"), "Heatmap_DF_log2FC_9bpstiling_EGR1_HT-SELEX_cycle3.txt", sep = "/"))
+Heatmap_DF_MPRAactivity_cycle3 <- read.table(paste(paste(Working_dir, "Output_Files", sep = "/"), "Heatmap_DF_MPRAactivity_9bpstiling_EGR1_HT-SELEX_cycle3.txt", sep = "/"))
+Heatmap_DF_MPRAactivity_cycle3[is.na(Heatmap_DF_MPRAactivity_cycle3)] <- 0
+Heatmap_DF_MPRAactivity_cycle3[] <- lapply(Heatmap_DF_MPRAactivity_cycle3, function(col) replace(col, col == -1, 0))
+
+# Cycle-4
+Heatmap_DF_log2FC_cycle4 <- read.table(paste(paste(Working_dir, "Output_Files", sep = "/"), "Heatmap_DF_log2FC_9bpstiling_EGR1_HT-SELEX_cycle4.txt", sep = "/"))
+Heatmap_DF_MPRAactivity_cycle4 <- read.table(paste(paste(Working_dir, "Output_Files", sep = "/"), "Heatmap_DF_MPRAactivity_9bpstiling_EGR1_HT-SELEX_cycle4.txt", sep = "/"))
+Heatmap_DF_MPRAactivity_cycle4[is.na(Heatmap_DF_MPRAactivity_cycle4)] <- 0
+Heatmap_DF_MPRAactivity_cycle4[] <- lapply(Heatmap_DF_MPRAactivity_cycle4, function(col) replace(col, col == -1, 0))
+
+######################################################### Max consecutive 1s
+Max_Lengths_input <- apply(Heatmap_DF_MPRAactivity_input, 1, function(col) Longest_1s(col)$max_length)
+Max_Lengths_cycle1 <- apply(Heatmap_DF_MPRAactivity_cycle1, 1, function(col) Longest_1s(col)$max_length)
+Max_Lengths_cycle2 <- apply(Heatmap_DF_MPRAactivity_cycle2, 1, function(col) Longest_1s(col)$max_length)
+Max_Lengths_cycle3 <- apply(Heatmap_DF_MPRAactivity_cycle3, 1, function(col) Longest_1s(col)$max_length)
+Max_Lengths_cycle4 <- apply(Heatmap_DF_MPRAactivity_cycle4, 1, function(col) Longest_1s(col)$max_length)
+
+######################################################### Stacked Histogram
+# 
+GreaterThanWhat <- 6
+Max_Lengths_input[which(Max_Lengths_input > GreaterThanWhat)] <- GreaterThanWhat
+Max_Lengths_cycle1[which(Max_Lengths_cycle1 > GreaterThanWhat)] <- GreaterThanWhat
+Max_Lengths_cycle2[which(Max_Lengths_cycle2 > GreaterThanWhat)] <- GreaterThanWhat
+Max_Lengths_cycle3[which(Max_Lengths_cycle3 > GreaterThanWhat)] <- GreaterThanWhat
+Max_Lengths_cycle4[which(Max_Lengths_cycle4 > GreaterThanWhat)] <- GreaterThanWhat
+
+
+# 
+num_reads_per_category <- c(table(Max_Lengths_input), 
+                            table(Max_Lengths_cycle1), 
+                            table(Max_Lengths_cycle2),
+                            table(Max_Lengths_cycle3),
+                            table(Max_Lengths_cycle4))
+
+# Create DF
+stacked_barplot_df <- as.data.frame(num_reads_per_category)
+stacked_barplot_df$numOverlappingBS <- names(num_reads_per_category)
+stacked_barplot_df$Cycles <- c(rep("Cycle_0", times = length(table(Max_Lengths_input))),
+                               rep("Cycle_1", times = length(table(Max_Lengths_cycle1))),
+                               rep("Cycle_2", times = length(table(Max_Lengths_cycle2))),
+                               rep("Cycle_3", times = length(table(Max_Lengths_cycle3))),
+                               rep("Cycle_4", times = length(table(Max_Lengths_cycle4))))
+
+# Make plot
+ggplot(stacked_barplot_df, aes(fill=numOverlappingBS, y=num_reads_per_category, x=Cycles)) + 
+  geom_bar(position="stack", stat="identity") + 
+  scale_fill_viridis(discrete = T) 
+
+```
+
+
+# Consecutive overlapping binding sites versus 60-mer PBM signal intensity
+```{r}
+# Read 60-mer PBM signal intensities
+EGR1_PBM_All60mers <- read.delim(paste(paste(Working_dir, "Input_Files/PBM_data_Egr1", sep = "/"), "Egr1_2580.2_v2_deBruijn.txt", sep = "/"), header = FALSE, sep = "\t")
+EGR1_PBM_All60mers <- EGR1_PBM_All60mers[complete.cases(EGR1_PBM_All60mers),]
+colnames(EGR1_PBM_All60mers) <- c("Alexa488Adjusted", "Sequence")
+
+######################################################### Tile PADIT-seq data on probes
+EGR1_PBM_All60mers$Longest_1s <- 0
+EGR1_PBM_All60mers$SecondLongest_1s <- 0
+EGR1_PBM_All60mers$ZeroesBetween <- -1
+for(i in 1:nrow(EGR1_PBM_All60mers))
+{
+  Current_DNA_sequence <- EGR1_PBM_All60mers$Sequence[i]
+  Sequence_8mers_DF <- data.frame()
+  for(j in 1:(nchar(Current_DNA_sequence) - 8))
+  {
+    Sequence_8mers_DF[j, 1] <- substr(Current_DNA_sequence, j, j+8)
+  }
+  dds_results_EGR1_df_subset <- dds_results_EGR1_df[which(dds_results_EGR1_df$TFBS %in% Sequence_8mers_DF$V1),]
+  dds_results_EGR1_df_subset <- dds_results_EGR1_df_subset[match(Sequence_8mers_DF$V1, dds_results_EGR1_df_subset$TFBS),]
+  EGR1_PBM_All60mers$num_active[i] <- sum(dds_results_EGR1_df_subset$MPRAactivity)
+  EGR1_PBM_All60mers$sum_log2FC[i] <- sum(2^dds_results_EGR1_df_subset$log2FoldChange)
+  if(sum(dds_results_EGR1_df_subset$MPRAactivity) == 0)
+  {
+    EGR1_PBM_All60mers$sum_log2FC_active_only[i] <- 0
+    next
+  }
+  EGR1_PBM_All60mers$sum_log2FC_active_only[i] <- sum(2^dds_results_EGR1_df_subset$log2FoldChange[which(dds_results_EGR1_df_subset$MPRAactivity == 1)])
+  
+  # Longest and second longest 1's
+  rle_1s <- rle(dds_results_EGR1_df_subset$MPRAactivity)
+  longest_second_vec <- sort(rle_1s$lengths[which(rle_1s$values == 1)], decreasing = TRUE)
+  if(length(longest_second_vec) > 0)
+  {
+    EGR1_PBM_All60mers$Longest_1s[i] <- longest_second_vec[1]
+  }
+  if(length(longest_second_vec) > 1)
+  {
+    EGR1_PBM_All60mers$SecondLongest_1s[i] <- longest_second_vec[2]
+    # Distance between the highest and second highest
+    longest_index <- which.max(rle_1s$lengths)
+    second_index <- (sort(rle_1s$lengths, decreasing = TRUE))[2]
+  
+    if(longest_index < second_index) {
+    # Second highest to the right
+    zeros_between <- sum(rle_1s$lengths[(longest_index+1):(second_index-1)]) 
+    } else {
+    # Second highest to the left 
+    zeros_between <- sum(rle_1s$lengths[(second_index+1):(longest_index-1)])
+    }
+    EGR1_PBM_All60mers$ZeroesBetween[i] <- zeros_between
+  }
+}
+
+######################################################### Boxplot - 1
+# subset to make sure there aren't any other active 9-mers
+EGR1_PBM_All60mers_subset <- EGR1_PBM_All60mers[which(EGR1_PBM_All60mers$num_active == EGR1_PBM_All60mers$Longest_1s),]
+EGR1_PBM_All60mers_subset$num_active[which(EGR1_PBM_All60mers_subset$num_active > 5)] <- 5
+table(EGR1_PBM_All60mers_subset$num_active)
+table(EGR1_PBM_All60mers$num_active)
+
+# Boxplot
+boxplot(log10(EGR1_PBM_All60mers_subset$Alexa488Adjusted) ~ EGR1_PBM_All60mers_subset$num_active, 
+        notch = TRUE, outline = FALSE)
+pairwise.wilcox.test(log10(EGR1_PBM_All60mers_subset$Alexa488Adjusted),
+                     EGR1_PBM_All60mers_subset$num_active)
+
+######################################################### Boxplot - 2
+# subset
+EGR1_PBM_All60mers_subset <- EGR1_PBM_All60mers[which(EGR1_PBM_All60mers$Longest_1s + EGR1_PBM_All60mers$SecondLongest_1s == 4 | 
+                                                        EGR1_PBM_All60mers$Longest_1s == 3 & EGR1_PBM_All60mers$SecondLongest_1s == 0), ]
+EGR1_PBM_All60mers_subset$interaction_term <- interaction(EGR1_PBM_All60mers_subset$Longest_1s, 
+                                                            EGR1_PBM_All60mers_subset$SecondLongest_1s, 
+                                                            drop = TRUE, lex.order = TRUE)
+EGR1_PBM_All60mers_subset$interaction_term[which(EGR1_PBM_All60mers_subset$interaction_term == "2.2")] <- "3.1"
+table(EGR1_PBM_All60mers_subset$interaction_term)
+
+# Boxplot
+boxplot(log10(EGR1_PBM_All60mers_subset$Alexa488Adjusted) ~ droplevels(EGR1_PBM_All60mers_subset$interaction_term), 
+        notch = TRUE, outline = FALSE)
+table(EGR1_PBM_All60mers_subset$interaction_term)
+pairwise.wilcox.test(EGR1_PBM_All60mers_subset$Alexa488Adjusted,
+                     EGR1_PBM_All60mers_subset$interaction_term)
+
+```
+
+
+# Consecutive overlapping 9-mer E-scores versus 10-mer PADIT-seq log2foldchange
+```{r}
+################################################################# Read PADIT-seq EGR1 9-mers
+# Read
+Register_1_9 <- read.table(paste(paste(Working_dir, "Output_Files", sep = "/"), "ZIF268_all9mers_1_9_median.txt", sep = "/"), header = TRUE)
+Register_2_10 <- read.table(paste(paste(Working_dir, "Output_Files", sep = "/"), "ZIF268_all9mers_2_10_median.txt", sep = "/"), header = TRUE)
+
+# Re-define MPRAactivity
+Register_1_9$MPRAactivity <- (Register_1_9$log2FoldChange > 0 & Register_1_9$padj < Cutoff_Value)*1
+Register_2_10$MPRAactivity <- (Register_2_10$log2FoldChange > 0 & Register_2_10$padj < Cutoff_Value)*1
+
+# Number of red points?
+table(Register_1_9$MPRAactivity)
+table(Register_2_10$MPRAactivity)
+
+# Fraction of red points?
+sum((Register_1_9$MPRAactivity == 1)*1)/nrow(Register_1_9)
+sum((Register_2_10$MPRAactivity == 1)*1)/nrow(Register_2_10)
+
+# Format
+colnames(Register_1_9) <- paste(colnames(Register_1_9), "1_9", sep = "_")
+colnames(Register_2_10) <- paste(colnames(Register_2_10), "2_10", sep = "_")
+TEMP1 <- merge(Register_1_9, Register_2_10, 
+               by.x = "X9.mer_1_9", by.y = "X9.mer_2_10")
+ZIF268_PBM_Escores_PADIT <- TEMP1; rm(TEMP1)
+ZIF268_PBM_Escores_PADIT$Mean_log2FC <- apply(ZIF268_PBM_Escores_PADIT[,c("log2FoldChange_1_9", "log2FoldChange_2_10")], 1, min)
+ZIF268_PBM_Escores_PADIT$MPRAactivity <- apply(ZIF268_PBM_Escores_PADIT[,c("MPRAactivity_1_9", "MPRAactivity_2_10")], 1, min)
+
+# 
+ZIF268_PBM_Escores_PADIT_Active <- ZIF268_PBM_Escores_PADIT[which(ZIF268_PBM_Escores_PADIT$MPRAactivity == 1),]
+
+################################################################# Read PBM data 
+# # Read ZIF268 PBM data
+# V1 <- read.table("~/Desktop/AVATAR/MPRA_All10mers/2023_05_15_NovaSeq_Azenta/Reference_files/Zif268_v1_kf0.25_9mers_111111111.txt", header = TRUE)
+# V2 <- read.table("~/Desktop/AVATAR/MPRA_All10mers/2023_05_15_NovaSeq_Azenta/Reference_files/Zif268_v2_kf0.25_9mers_111111111.txt", header = TRUE)
+V1 <- read.table("~/Desktop/AVATAR/MPRA_All10mers/2023_05_15_NovaSeq_Azenta/Reference_files/Zif268_v1_kf0.5_9mers_111111111.txt", header = TRUE)
+V2 <- read.table("~/Desktop/AVATAR/MPRA_All10mers/2023_05_15_NovaSeq_Azenta/Reference_files/Zif268_v2_kf0.5_9mers_111111111.txt", header = TRUE)
+# V1 <- read.table("~/Desktop/AVATAR/MPRA_All10mers/2023_05_15_NovaSeq_Azenta/Reference_files/Zif268_v1_kf0.75_9mers_111111111.txt", header = TRUE)
+# V2 <- read.table("~/Desktop/AVATAR/MPRA_All10mers/2023_05_15_NovaSeq_Azenta/Reference_files/Zif268_v2_kf0.75_9mers_111111111.txt", header = TRUE)
+# V1 <- read.table("~/Desktop/AVATAR/MPRA_All10mers/2023_05_15_NovaSeq_Azenta/Reference_files/Zif268_v1_kf1_9mers_111111111.txt", header = TRUE)
+# V2 <- read.table("~/Desktop/AVATAR/MPRA_All10mers/2023_05_15_NovaSeq_Azenta/Reference_files/Zif268_v2_kf1_9mers_111111111.txt", header = TRUE)
+TEMP <- merge(V1, V2, by = "X9.mer")
+TEMP$E.score <- apply(TEMP[, c("E.score.x", "E.score.y")], 1, max)
+TEMP$Z.score <- apply(TEMP[, c("Z.score.x", "Z.score.y")], 1, min)
+ZIF268_PBM_Escores <- TEMP[, c("X9.mer", "X9.mer.1.x", "E.score")]; rm(TEMP)
+colnames(ZIF268_PBM_Escores) <- c("X9.mer", "X9.mer.1", "E.score")
+
+# 
+df1 <- ZIF268_PBM_Escores[c("X9.mer", "E.score")]
+df2 <- ZIF268_PBM_Escores[c("X9.mer.1", "E.score")]
+colnames(df1) <- c("X9.mer", "E.score")
+colnames(df2) <- c("X9.mer", "E.score")
+ZIF268_PBM_Escores <- unique(rbind(df1, df2))
+
+################################################################# 
+# Read 10-mer ZIF268 PADIT-seq data
+dds_results_ZIF268_df <- read.table(paste(paste(Working_dir, "Output_Files", sep = "/"), "dds_results_ZIF268_df.txt", sep = "/"), header = TRUE)
+
+# 
+dds_results_ZIF268_df$mer9_1 <- substr(rownames(dds_results_ZIF268_df), 1, 9)
+dds_results_ZIF268_df$mer9_2 <- substr(rownames(dds_results_ZIF268_df), 2, 10)
+
+# Merge
+TEMP1 <- merge(dds_results_ZIF268_df,
+               ZIF268_PBM_Escores, 
+               by.x = "mer9_1", by.y = "X9.mer")
+colnames(TEMP1)[ncol(TEMP1)] <- "E.score_1"
+TEMP2 <- merge(TEMP1,
+               ZIF268_PBM_Escores, 
+               by.x = "mer9_2", by.y = "X9.mer")
+colnames(TEMP2)[ncol(TEMP2)] <- "E.score_2"
+dds_results_ZIF268_df_tiledEscores <- TEMP2
+
+################################################################# Effect of flanking nucleotides (aggregate analysis)
+correlation_test_results_df <- data.frame()
+dds_results_ZIF268_df_tiledEscores_subset <- dds_results_ZIF268_df_tiledEscores
+Unique_9mers <- ZIF268_PBM_Escores_PADIT_Active
+
+for(i in 1:nrow(Unique_9mers))
+{
+  Selected_9mer <- Unique_9mers$X9.mer_1_9[i]
+  Selected_9mer_RC <- Unique_9mers$X9.mer.1_1_9[i]
+  
+  # 
+  dds_results_ZIF268_df_tiledEscores_Pos1 <- unique(dds_results_ZIF268_df_tiledEscores_subset[which(dds_results_ZIF268_df_tiledEscores_subset$mer9_1 == Selected_9mer),])
+  dds_results_ZIF268_df_tiledEscores_Pos2 <- unique(dds_results_ZIF268_df_tiledEscores_subset[which(dds_results_ZIF268_df_tiledEscores_subset$mer9_2 == Selected_9mer),])
+  
+  # 
+  dds_results_ZIF268_df_tiledEscores_Pos1_RC <- unique(dds_results_ZIF268_df_tiledEscores_subset[which(dds_results_ZIF268_df_tiledEscores_subset$mer9_1 == Selected_9mer_RC),])
+  dds_results_ZIF268_df_tiledEscores_Pos2_RC <- unique(dds_results_ZIF268_df_tiledEscores_subset[which(dds_results_ZIF268_df_tiledEscores_subset$mer9_2 == Selected_9mer_RC),])
+  
+  # 
+  df1 <- dds_results_ZIF268_df_tiledEscores_Pos1[, c("log2FoldChange", "E.score_2", "MPRAactivity")]
+  df2 <- dds_results_ZIF268_df_tiledEscores_Pos2[, c("log2FoldChange", "E.score_1", "MPRAactivity")]
+  colnames(df1) <- c("log2FoldChange", "E.score", "MPRAactivity")
+  colnames(df2) <- c("log2FoldChange", "E.score", "MPRAactivity")
+  dds_results_ZIF268_df_tiledEscores_subset_subset_Fwd <- rbind(df1, df2)
+  dds_results_ZIF268_df_tiledEscores_subset_subset_Fwd_tmp <- dds_results_ZIF268_df_tiledEscores_subset_subset_Fwd[complete.cases(dds_results_ZIF268_df_tiledEscores_subset_subset_Fwd),]
+  num_sig_fwd <- sum((dds_results_ZIF268_df_tiledEscores_subset_subset_Fwd_tmp$MPRAactivity == 1)*1)
+  
+  # 
+  df1 <- dds_results_ZIF268_df_tiledEscores_Pos1_RC[, c("log2FoldChange", "E.score_2", "MPRAactivity")]
+  df2 <- dds_results_ZIF268_df_tiledEscores_Pos2_RC[, c("log2FoldChange", "E.score_1", "MPRAactivity")]
+  colnames(df1) <- c("log2FoldChange", "E.score", "MPRAactivity")
+  colnames(df2) <- c("log2FoldChange", "E.score", "MPRAactivity")
+  dds_results_ZIF268_df_tiledEscores_subset_subset_Rev <- rbind(df1, df2)
+  dds_results_ZIF268_df_tiledEscores_subset_subset_Rev_tmp <- dds_results_ZIF268_df_tiledEscores_subset_subset_Rev[complete.cases(dds_results_ZIF268_df_tiledEscores_subset_subset_Rev),]
+  num_sig_rev <- sum((dds_results_ZIF268_df_tiledEscores_subset_subset_Rev_tmp$MPRAactivity == 1)*1)
+  
+  if(num_sig_fwd >= num_sig_rev)
+  {
+    dds_results_ZIF268_df_tiledEscores_subset_subset <- dds_results_ZIF268_df_tiledEscores_subset_subset_Fwd
+  }
+  if(num_sig_fwd < num_sig_rev)
+  {
+    dds_results_ZIF268_df_tiledEscores_subset_subset <- dds_results_ZIF268_df_tiledEscores_subset_subset_Rev
+  }
+  
+  if(nrow(dds_results_ZIF268_df_tiledEscores_subset_subset) < 4)
+  {
+    correlation_test_results_df[i, 1] <- 0
+    correlation_test_results_df[i, 2] <- 1
+    correlation_test_results_df[i, 3] <- 0
+    correlation_test_results_df[i, 4] <- 0
+    correlation_test_results_df[i, 5] <- 0
+    next
+  }
+  
+  correlation_test_results <- cor.test(dds_results_ZIF268_df_tiledEscores_subset_subset$E.score, 
+                                       dds_results_ZIF268_df_tiledEscores_subset_subset$log2FoldChange) 
+  correlation_test_results_df[i, 1] <- correlation_test_results$estimate
+  correlation_test_results_df[i, 2] <- correlation_test_results$p.value
+  correlation_test_results_df[i, 3] <- nrow(dds_results_ZIF268_df_tiledEscores_subset_subset)
+  correlation_test_results_df[i, 4] <- sum((dds_results_ZIF268_df_tiledEscores_subset_subset$MPRAactivity == 1)*1)
+  correlation_test_results_df[i, 5] <- max(dds_results_ZIF268_df_tiledEscores_subset_subset$E.score) - min(dds_results_ZIF268_df_tiledEscores_subset_subset$E.score) 
+}
+rownames(correlation_test_results_df) <- ZIF268_PBM_Escores_PADIT_Active$X9.mer_1_9
+colnames(correlation_test_results_df) <- c("correlation_coeff", "p.value", "numObs", "numSig", "Range_escore")
+
+# Adjust for multiple testing
+correlation_test_results_df$p.adj <- p.adjust(correlation_test_results_df$p.value, 
+                                              method = "fdr")
+correlation_test_results_df$p.adj.binary <- (correlation_test_results_df$p.adj<0.1)*1
+table(correlation_test_results_df$p.adj.binary)
+
+# Filter
+# correlation_test_results_df <- correlation_test_results_df[which(correlation_test_results_df$numObs > 4),]
+# correlation_test_results_df <- correlation_test_results_df[which(correlation_test_results_df$numSig > 0),]
+# correlation_test_results_df <- correlation_test_results_df[which(correlation_test_results_df$Range_escore > 0.1),]
+
+# Histogram
+hist(correlation_test_results_df$correlation_coeff, 
+     breaks = 100, freq = FALSE,
+     xlim = c(-1, 1), 
+     col = "dark green",
+     xlab = "Pearson R (mean E-scores of flanking nucleotides VS ZIF268 PADIT-seq log2FC)", 
+     main = "Effect of flanking nucleotides on ZIF268 PADIT-seq log2FC")
+
+################################################################# Effect of flanking nucleotides (case by case basis)
+dds_results_ZIF268_df_tiledEscores$TFBS <- paste(dds_results_ZIF268_df_tiledEscores$mer9_1, 
+                                                 substr(dds_results_ZIF268_df_tiledEscores$mer9_2, 9, 9), sep = "")
+Selected_9mer <- "GCGTGGGTG"
+dds_results_ZIF268_df_tiledEscores_Pos1 <- dds_results_ZIF268_df_tiledEscores[which(dds_results_ZIF268_df_tiledEscores$mer9_1 == Selected_9mer),]
+dds_results_ZIF268_df_tiledEscores_Pos2 <- dds_results_ZIF268_df_tiledEscores[which(dds_results_ZIF268_df_tiledEscores$mer9_2 == Selected_9mer),]
+
+df1 <- dds_results_ZIF268_df_tiledEscores_Pos1[, c("log2FoldChange", "E.score_2", "MPRAactivity", "TFBS")]
+df2 <- dds_results_ZIF268_df_tiledEscores_Pos2[, c("log2FoldChange", "E.score_1", "MPRAactivity", "TFBS")]
+colnames(df1) <- c("log2FoldChange", "E.score", "MPRAactivity", "TFBS")
+colnames(df2) <- c("log2FoldChange", "E.score", "MPRAactivity", "TFBS")
+dds_results_ZIF268_df_tiledEscores2 <- rbind(df1, df2)
+dds_results_ZIF268_df_tiledEscores2$Colour <- "black"
+dds_results_ZIF268_df_tiledEscores2$Colour[which(dds_results_ZIF268_df_tiledEscores2$MPRAactivity == 1)] <- "red"
+plot(dds_results_ZIF268_df_tiledEscores2$E.score, 
+     dds_results_ZIF268_df_tiledEscores2$log2FoldChange,
+     pch = 19, cex = 2, 
+     col = dds_results_ZIF268_df_tiledEscores2$Colour, 
+     # xlim = c(0, 0.5), ylim = c(0, 3), 
+     xlab = "Mean E-score", ylab = "PADIT-seq log2FC")
+cor.test(dds_results_ZIF268_df_tiledEscores2$E.score, 
+         dds_results_ZIF268_df_tiledEscores2$log2FoldChange) 
+
+################################################################# Linear model 
+# Subset
+Unique_9mers <- unique(c(ZIF268_PBM_Escores_PADIT$X9.mer_1_9[which(ZIF268_PBM_Escores_PADIT$MPRAactivity == 1)], 
+                         ZIF268_PBM_Escores_PADIT$X9.mer.1_1_9[which(ZIF268_PBM_Escores_PADIT$MPRAactivity == 1)]))
+dds_results_ZIF268_df_tiledEscores_subset3 <- dds_results_ZIF268_df_tiledEscores[which(dds_results_ZIF268_df_tiledEscores$mer9_1 %in% Unique_9mers | 
+                                                                                       dds_results_ZIF268_df_tiledEscores$mer9_2 %in% Unique_9mers),] 
+
+# lm
+summary(lm(dds_results_ZIF268_df_tiledEscores_subset3$log2FoldChange ~ 
+             dds_results_ZIF268_df_tiledEscores_subset3$E.score_1 + 
+             dds_results_ZIF268_df_tiledEscores_subset3$E.score_2))
+
+summary(lm(dds_results_ZIF268_df_tiledEscores_subset3$log2FoldChange ~ 
+             dds_results_ZIF268_df_tiledEscores_subset3$E.score_1))
+
+summary(lm(dds_results_ZIF268_df_tiledEscores_subset3$log2FoldChange ~ 
+             dds_results_ZIF268_df_tiledEscores_subset3$E.score_2))
+
+```
+
