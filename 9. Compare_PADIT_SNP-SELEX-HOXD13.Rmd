@@ -1,0 +1,637 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+
+# Set Global Variables here
+
+```{r}
+# Please change the working directory
+Working_dir <- "~/Desktop/AVATAR/PADIT-seq-Manuscript/Code_Availability/"
+
+# Please be sure to install these libraries
+library(pheatmap); library(ggplot2); library(DESeq2); library(ggrepel); library("stringr"); library(viridis)
+
+# FDR cutoff (do not change)
+Cutoff_Value <- 0.05
+Primer_sequence <- "GTCTGTGTTCCGTTGTCCGTGCTG"
+```
+
+
+# Important functions
+```{r}
+reverse_complement <- function(dna_sequence) {
+  # Convert the input to uppercase to handle both cases
+  dna_sequence <- toupper(dna_sequence)
+  
+  # Define the complement base pairs
+  complement <- c(A = "T", T = "A", C = "G", G = "C")
+  
+  # Split the sequence into individual bases
+  bases <- strsplit(dna_sequence, "")[[1]]
+  
+  # Get the complement of each base
+  complemented <- complement[bases]
+  
+  # Reverse the complemented sequence and join it back into a string
+  reverse_complemented <- paste(rev(complemented), collapse = "")
+  
+  return(reverse_complemented)
+}
+
+# Example usage:
+dna_seq <- "ATGCATGC"
+result <- reverse_complement(dna_seq)
+print(result)
+```
+
+
+# Read HOXD13 8-mer PADIT-seq log2foldchange values for the 3 registers
+```{r}
+################################################################# Read HOXD13 8-mer PADIT-seq log2foldchange values for the 3 registers
+Register_1_8 <- read.table(paste(paste(Working_dir, "Output_Files", sep = "/"), "HOXD13_all8mers_1_8_median.txt", sep = "/"), header = TRUE)
+Register_2_9 <- read.table(paste(paste(Working_dir, "Output_Files", sep = "/"), "HOXD13_all8mers_2_9_median.txt", sep = "/"), header = TRUE)
+Register_3_10 <- read.table(paste(paste(Working_dir, "Output_Files", sep = "/"), "HOXD13_all8mers_3_10_median.txt", sep = "/"), header = TRUE)
+
+# Re-define MPRAactivity
+Register_1_8$MPRAactivity <- (Register_1_8$log2FoldChange > 0 & Register_1_8$padj < Cutoff_Value)*1
+Register_2_9$MPRAactivity <- (Register_2_9$log2FoldChange > 0 & Register_2_9$padj < Cutoff_Value)*1
+Register_3_10$MPRAactivity <- (Register_3_10$log2FoldChange > 0 & Register_3_10$padj < Cutoff_Value)*1
+
+# Number of red points?
+table(Register_1_8$MPRAactivity)
+table(Register_2_9$MPRAactivity)
+table(Register_3_10$MPRAactivity)
+
+# Format
+colnames(Register_1_8) <- paste(colnames(Register_1_8), "1_8", sep = "_")
+colnames(Register_2_9) <- paste(colnames(Register_2_9), "2_9", sep = "_")
+colnames(Register_3_10) <- paste(colnames(Register_3_10), "3_10", sep = "_")
+TEMP1 <- merge(Register_1_8, Register_2_9,
+               by.x = "X8.mer_1_8", by.y = "X8.mer_2_9")
+TEMP2 <- merge(TEMP1, Register_3_10,
+               by.x = "X8.mer_1_8", by.y = "X8.mer_3_10")
+HOXD13_PBM_Escores_PADIT <- TEMP2; rm(TEMP1); rm(TEMP2)
+HOXD13_PBM_Escores_PADIT$Mean_log2FC <- apply(HOXD13_PBM_Escores_PADIT[,c("log2FoldChange_1_8", "log2FoldChange_2_9", "log2FoldChange_3_10")], 1, median)
+HOXD13_PBM_Escores_PADIT$MPRAactivity <- apply(HOXD13_PBM_Escores_PADIT[,c("MPRAactivity_1_8", "MPRAactivity_2_9", "MPRAactivity_3_10")], 1, median)
+
+#
+df1 <- HOXD13_PBM_Escores_PADIT[,c("X8.mer_1_8", "Mean_log2FC", "MPRAactivity")]
+colnames(df1) <- c("TFBS", "log2FoldChange", "MPRAactivity")
+df2 <- HOXD13_PBM_Escores_PADIT[,c("X8.mer.1_1_8", "Mean_log2FC", "MPRAactivity")]
+colnames(df2) <- c("TFBS", "log2FoldChange", "MPRAactivity")
+dds_results_HOXD13_df <- rbind(df1, df2)
+
+```
+
+
+# SNP-SELEX
+```{r}
+# Read and format SNP-SELEX data
+HOXD13_SNP_SELEX <- read.table(paste(paste(Working_dir, "Input_Files/SNP-SELEX", sep = "/"), "41586_2021_3211_MOESM13_ESM_HOXD13.txt", sep = "/"), header = TRUE)
+HOXD13_SNP_SELEX$Coordinates <- paste(">", paste(paste(HOXD13_SNP_SELEX$chr, HOXD13_SNP_SELEX$start, sep = ":"), HOXD13_SNP_SELEX$end, sep = "-"), sep = "")
+DNA_Sequences <- read.table(paste(paste(Working_dir, "Input_Files/SNP-SELEX", sep = "/"), "41586_2021_3211_MOESM13_ESM_HOXD13.bed.fa.txt", sep = "/"), header = TRUE)
+TEMP <- merge(HOXD13_SNP_SELEX, DNA_Sequences, by = "Coordinates")
+HOXD13_SNP_SELEX <- TEMP
+HOXD13_SNP_SELEX$DNA_REF <- toupper(HOXD13_SNP_SELEX$DNA_REF)
+for(i in 1:nrow(HOXD13_SNP_SELEX))
+{
+  if(substr(HOXD13_SNP_SELEX$DNA_REF[i], 20, 20) == HOXD13_SNP_SELEX$ref[i])
+  {
+    HOXD13_SNP_SELEX$DNA_ALT[i] <- HOXD13_SNP_SELEX$DNA_REF[i]
+    substr(HOXD13_SNP_SELEX$DNA_ALT[i], 20, 20) <- HOXD13_SNP_SELEX$alt[i]
+  }
+}
+HOXD13_SNP_SELEX <- unique(HOXD13_SNP_SELEX)
+
+######################################################### Tile
+#
+log2FC_ref <- list()
+MPRA_activity_ref <- list()
+log2FC_alt <- list()
+MPRA_activity_alt <- list()
+
+# 
+for(i in 1:nrow(HOXD13_SNP_SELEX))
+{
+  # Ref
+  Current_DNA_sequence <- HOXD13_SNP_SELEX$DNA_REF[i]
+  Sequence_9mers_DF <- data.frame()
+  for(j in 1:(nchar(Current_DNA_sequence) - 7))
+  {
+    Sequence_9mers_DF[j, 1] <- substr(Current_DNA_sequence, j, j+7)
+  }
+  dds_results_HOXD13_df_subset <- dds_results_HOXD13_df[which(dds_results_HOXD13_df$TFBS %in% Sequence_9mers_DF$V1),]
+  dds_results_HOXD13_df_subset <- dds_results_HOXD13_df_subset[match(Sequence_9mers_DF$V1, dds_results_HOXD13_df_subset$TFBS),] 
+  log2FC_ref[[i]] <- dds_results_HOXD13_df_subset$log2FoldChange
+  MPRA_activity_ref[[i]] <- dds_results_HOXD13_df_subset$MPRAactivity
+                    
+  # Alt
+  Current_DNA_sequence <- HOXD13_SNP_SELEX$DNA_ALT[i]
+  Sequence_9mers_DF <- data.frame()
+  for(j in 1:(nchar(Current_DNA_sequence) - 7))
+  {
+    Sequence_9mers_DF[j, 1] <- substr(Current_DNA_sequence, j, j+7)
+  }
+  dds_results_HOXD13_df_subset <- dds_results_HOXD13_df[which(dds_results_HOXD13_df$TFBS %in% Sequence_9mers_DF$V1),]
+  dds_results_HOXD13_df_subset <- dds_results_HOXD13_df_subset[match(Sequence_9mers_DF$V1, dds_results_HOXD13_df_subset$TFBS),] 
+  log2FC_alt[[i]] <- dds_results_HOXD13_df_subset$log2FoldChange
+  MPRA_activity_alt[[i]] <- dds_results_HOXD13_df_subset$MPRAactivity
+}
+
+# Define 
+pval_cutoff <- 0.01
+HOXD13_SNP_SELEX$PBS_sig <- (HOXD13_SNP_SELEX$pval < pval_cutoff)*1
+HOXD13_SNP_SELEX$Diff_MPRA_Activity <- sapply(MPRA_activity_ref, sum) - sapply(MPRA_activity_alt, sum)
+HOXD13_SNP_SELEX$Diff_log2FC <- sapply(log2FC_ref, sum) - sapply(log2FC_alt, sum)
+
+# PADIT-seq predictions
+HOXD13_SNP_SELEX$PADIT_prediction <- 0
+HOXD13_SNP_SELEX$PADIT_prediction[which(HOXD13_SNP_SELEX$Diff_MPRA_Activity != 0)] <- 1
+HOXD13_SNP_SELEX$PADIT_prediction[which(abs(HOXD13_SNP_SELEX$Diff_log2FC) < 1)] <- 0
+
+# Correct definitions
+HOXD13_SNP_SELEX$Diff_log2FC[which(abs(HOXD13_SNP_SELEX$Diff_log2FC) > 90)] <- 0
+HOXD13_SNP_SELEX$Diff_log2FC[which(HOXD13_SNP_SELEX$Diff_log2FC > 0 & HOXD13_SNP_SELEX$Diff_MPRA_Activity < 0)] <- 0
+HOXD13_SNP_SELEX$Diff_log2FC[which(HOXD13_SNP_SELEX$Diff_log2FC < 0 & HOXD13_SNP_SELEX$Diff_MPRA_Activity > 0)] <- 0
+HOXD13_SNP_SELEX$Diff_MPRA_Activity[which(HOXD13_SNP_SELEX$Diff_log2FC == 0)] <- 0
+HOXD13_SNP_SELEX$Diff_MPRA_Activity[which(HOXD13_SNP_SELEX$Diff_log2FC == 0)] <- 0
+HOXD13_SNP_SELEX$PADIT_prediction[which(HOXD13_SNP_SELEX$Diff_log2FC == 0)] <- 0
+HOXD13_SNP_SELEX$PADIT_prediction[which(HOXD13_SNP_SELEX$Diff_log2FC == 0)] <- 0
+
+# 
+table(HOXD13_SNP_SELEX$PBS_sig, HOXD13_SNP_SELEX$PADIT_prediction)
+
+```
+
+
+# Scatter plots
+```{r}
+# Define Interaction Term
+HOXD13_SNP_SELEX$PBS.PADIT <- interaction(HOXD13_SNP_SELEX$PBS_sig, HOXD13_SNP_SELEX$PADIT_prediction)
+
+# Sort
+HOXD13_SNP_SELEX$order <- 1
+HOXD13_SNP_SELEX$order[which(HOXD13_SNP_SELEX$PBS.PADIT == "1.0")] <- 2
+HOXD13_SNP_SELEX$order[which(HOXD13_SNP_SELEX$PBS.PADIT == "0.1")] <- 3
+HOXD13_SNP_SELEX$order[which(HOXD13_SNP_SELEX$PBS.PADIT == "1.1")] <- 4
+HOXD13_SNP_SELEX <- HOXD13_SNP_SELEX[order(HOXD13_SNP_SELEX$order, decreasing = FALSE),]
+
+# plot
+ggplot(HOXD13_SNP_SELEX, aes(x = Diff_log2FC, y = pbs)) +
+  geom_point(size=2, aes(colour = PBS.PADIT)) + 
+  scale_colour_viridis_d(option = "turbo") + 
+  theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank())
+  theme_dark()
+
+# Correlation
+cor.test(HOXD13_SNP_SELEX$Diff_log2FC[which(HOXD13_SNP_SELEX$PBS.PADIT != "0.0")], 
+         HOXD13_SNP_SELEX$pbs[which(HOXD13_SNP_SELEX$PBS.PADIT != "0.0")])
+
+```
+
+
+
+
+
+```{r}
+fdr_thresholds <- seq(0, 1, by = 0.01)
+num_pbs_sig <- vector(length = length(fdr_thresholds))
+num_PADIT_seq_sig <- vector(length = length(fdr_thresholds))
+for(i in 1:length(fdr_thresholds))
+{
+  num_pbs_sig[i] <- sum(HOXD13_SNP_SELEX$pval < fdr_thresholds[i])
+  num_PADIT_seq_sig[i] <- sum(HOXD13_SNP_SELEX$pval < fdr_thresholds[i] & HOXD13_SNP_SELEX$PADIT_prediction == 1)
+}
+
+# plot
+plot(fdr_thresholds, num_pbs_sig, 
+     type = "b", pch = 19)
+points(fdr_thresholds, num_PADIT_seq_sig, 
+     type = "b", pch = 19)
+abline(h = sum(HOXD13_SNP_SELEX$PADIT_prediction), 
+       col = "red")
+abline(v = 0.1, col = "red")
+
+```
+
+
+# Euler Diagram
+```{r}
+library(VennDiagram)
+plot.new()
+draw.pairwise.venn(area1 = nrow(HOXD13_SNP_SELEX[which(HOXD13_SNP_SELEX$PBS_sig == 1),]), 
+                   area2 = nrow(HOXD13_SNP_SELEX[which(HOXD13_SNP_SELEX$PADIT_prediction == 1),]),
+                   cross.area = nrow(HOXD13_SNP_SELEX[which(HOXD13_SNP_SELEX$PBS_sig == 1 & HOXD13_SNP_SELEX$PADIT_prediction == 1),]), 
+                   fill = c("red", "green"))
+
+```
+
+
+
+# PBS is correlated with the number of overlapping binding sites
+```{r}
+# Format
+HOXD13_SNP_SELEX$Diff_MPRA_Activity_abs_format <- abs(HOXD13_SNP_SELEX$Diff_MPRA_Activity)
+HOXD13_SNP_SELEX$Diff_MPRA_Activity_abs_format[which(HOXD13_SNP_SELEX$Diff_MPRA_Activity_abs_format > 6)] <- 6
+
+# Boxplot
+boxplot(abs(HOXD13_SNP_SELEX$pbs) ~ HOXD13_SNP_SELEX$Diff_MPRA_Activity_abs_format, 
+        outline = FALSE, notch = TRUE, 
+        col = c("black", "green", "green", "green", "green", "green", "green"))
+table(HOXD13_SNP_SELEX$Diff_MPRA_Activity_abs_format)
+
+# wilcoxon test
+pairwise.wilcox.test(abs(HOXD13_SNP_SELEX$pbs), HOXD13_SNP_SELEX$Diff_MPRA_Activity_abs_format)
+
+```
+
+# Plot specific examples
+```{r}
+discordant_cases <- c("rs76168667", "rs140812713")
+
+# SNPs to highlight where just the 1 overlapping binding site is altered
+SNPs_to_highlight <- c("rs1262183", "rs270917", "rs492443", "rs62523478")
+
+rsid <- "rs1262183"
+row_number <- which(HOXD13_SNP_SELEX$rsid %in% rsid)
+
+# plot ref
+col_vec <- rep("black", length(log2FC_ref[[row_number]]))
+col_vec[which(MPRA_activity_ref[[row_number]] == 1)] <- "red"       
+plot(1:length(col_vec), 
+     log2FC_ref[[row_number]], 
+     xlim = c(4, 27), cex = 4, 
+     pch = 19, type = "b", 
+     col = col_vec, ylim = c(-0.5, 2.5))
+
+# plot alt
+col_vec <- rep("black", length(log2FC_alt[[row_number]]))
+col_vec[which(MPRA_activity_alt[[row_number]] == 1)] <- "red"       
+plot(1:length(col_vec), 
+     log2FC_alt[[row_number]], 
+     xlim = c(4, 27), cex = 4, 
+     pch = 19, type = "b", 
+     col = col_vec, ylim = c(-0.5, 2.5))
+
+```
+
+
+# Run MotifBreakR
+```{r}
+library(motifbreakR); library(BSgenome); library(MotifDb); library(GenomicRanges)
+library(BSgenome.Hsapiens.UCSC.hg19); library(SNPlocs.Hsapiens.dbSNP155.GRCh37)
+
+######################################################### Run MotifBreakR
+# format
+HOXD13_SNP_SELEX_bedFormat <- HOXD13_SNP_SELEX[, c("chr", "start", "end")]
+HOXD13_SNP_SELEX_bedFormat$start <- HOXD13_SNP_SELEX_bedFormat$start + 19
+HOXD13_SNP_SELEX_bedFormat$end <- HOXD13_SNP_SELEX_bedFormat$end - 20
+HOXD13_SNP_SELEX_bedFormat$SNP_ID <- paste(paste(paste(paste(HOXD13_SNP_SELEX_bedFormat$chr, HOXD13_SNP_SELEX_bedFormat$end, sep = ":"), HOXD13_SNP_SELEX$ref, sep = ":"), HOXD13_SNP_SELEX$alt, sep = ":"))
+HOXD13_SNP_SELEX_bedFormat$V5 <- 0
+HOXD13_SNP_SELEX_bedFormat$strand <- "+"
+write.table(HOXD13_SNP_SELEX_bedFormat, 
+            file = paste(paste(Working_dir, "Output_Files", sep = "/"), "HOXD13_SNP_SELEX_bedFormat.bed", sep = "/"),
+            col.names = FALSE, row.names = FALSE, quote = FALSE, sep = "\t")
+
+# Variants from bed format
+snps.mb.frombed <- variants.from.file(file = paste(paste(Working_dir, "Output_Files", sep = "/"), "HOXD13_SNP_SELEX_bedFormat.bed", sep = "/"),
+                                  search.genome = BSgenome.Hsapiens.UCSC.hg19,
+                                  format = "bed")
+# Run MotifBreakR
+results <- motifbreakR(snpList = snps.mb.frombed, filterp = TRUE,
+                       pwmList = MotifDb[grep('hoxd13', values (MotifDb)$geneSymbol, ignore.case=TRUE)],
+                       threshold = 1e-4,
+                       method = "ic",
+                       bkg = c(A=0.25, C=0.25, G=0.25, T=0.25),
+                       BPPARAM = BiocParallel::SerialParam())
+
+# Convert to data frame
+MotifBreakR_results <- as.data.frame(results, row.names = NULL)
+
+######################################################### Keep only 1 prediction
+Unique_SNP_ids_motifBreakR <- unique(MotifBreakR_results$SNP_id)
+MotifBreakR_results_formatted <- data.frame()
+for(i in 1:length(Unique_SNP_ids_motifBreakR))
+{
+  Current_SNP <- MotifBreakR_results[which(MotifBreakR_results$SNP_id %in% Unique_SNP_ids_motifBreakR[i]), ]
+  if(nrow(Current_SNP) == 1)
+  {
+    MotifBreakR_results_formatted <- rbind(MotifBreakR_results_formatted, 
+                                           Current_SNP)
+    next
+  }
+  if(nrow(Current_SNP) > 1)
+  {
+    Current_SNP <- Current_SNP[which(abs(Current_SNP$alleleDiff) == max(abs(Current_SNP$alleleDiff))),]
+    MotifBreakR_results_formatted <- rbind(MotifBreakR_results_formatted, 
+                                           Current_SNP[1,])
+    next
+  }
+}
+
+# Re-define SNP_ID
+HOXD13_SNP_SELEX$SNP_id <- paste(paste(paste(paste(HOXD13_SNP_SELEX$chr, HOXD13_SNP_SELEX$end - 20, sep = ":"), HOXD13_SNP_SELEX$ref, sep = ":"), HOXD13_SNP_SELEX$alt, sep = ":"))
+
+# Add MotifBreakR results to data frame
+HOXD13_SNP_SELEX_MotifBreakR <- merge(HOXD13_SNP_SELEX, MotifBreakR_results_formatted, by = "SNP_id", all.x = TRUE)
+HOXD13_SNP_SELEX_MotifBreakR$alleleEffectSize[is.na(HOXD13_SNP_SELEX_MotifBreakR$alleleEffectSize)] <- 0
+HOXD13_SNP_SELEX_MotifBreakR$effect[is.na(HOXD13_SNP_SELEX_MotifBreakR$effect)] <- "none"
+
+# Table (MotifBreakR has a very high false positive rate)
+table(HOXD13_SNP_SELEX_MotifBreakR$PBS.PADIT, HOXD13_SNP_SELEX_MotifBreakR$effect)
+
+# 
+plot(HOXD13_SNP_SELEX_MotifBreakR$alleleEffectSize[which(HOXD13_SNP_SELEX_MotifBreakR$PBS_sig == 1)], 
+     HOXD13_SNP_SELEX_MotifBreakR$pbs[which(HOXD13_SNP_SELEX_MotifBreakR$PBS_sig == 1)])
+
+```
+
+
+# Select SNPs to test with PBM
+```{r}
+# 
+numSNPs_toTest <- 280
+
+# set seed
+set.seed(12037)
+
+# SNPs with significant PBS scores are automatically included
+HOXD13_SNP_SELEX_MotifBreakR_select4pbm <- HOXD13_SNP_SELEX_MotifBreakR[which(HOXD13_SNP_SELEX_MotifBreakR$PBS.PADIT %in% c("1.1", "1.0")),]
+dim(HOXD13_SNP_SELEX_MotifBreakR_select4pbm)
+
+# Randomly include 50 SNPs not predicted to alter TF binding by both SNP-SELEX and PADIT-seq but predicted to alter binding by MOTIFBREAKR
+HOXD13_SNP_SELEX_MotifBreakR_00 <- HOXD13_SNP_SELEX_MotifBreakR[which(HOXD13_SNP_SELEX_MotifBreakR$PBS.PADIT %in% c("0.0") & HOXD13_SNP_SELEX_MotifBreakR$effect != "none"),]
+HOXD13_SNP_SELEX_MotifBreakR_00_random50 <- HOXD13_SNP_SELEX_MotifBreakR_00[sample(1:nrow(HOXD13_SNP_SELEX_MotifBreakR_00), 50),]
+HOXD13_SNP_SELEX_MotifBreakR_select4pbm <- rbind(HOXD13_SNP_SELEX_MotifBreakR_select4pbm, HOXD13_SNP_SELEX_MotifBreakR_00_random50)
+
+# Randomly include 50 SNPs not predicted to alter TF binding by both SNP-SELEX and PADIT-seq, as well as MOTIFBREAKR
+HOXD13_SNP_SELEX_MotifBreakR_00 <- HOXD13_SNP_SELEX_MotifBreakR[which(HOXD13_SNP_SELEX_MotifBreakR$PBS.PADIT %in% c("0.0") & HOXD13_SNP_SELEX_MotifBreakR$effect == "none"),]
+HOXD13_SNP_SELEX_MotifBreakR_00_random50 <- HOXD13_SNP_SELEX_MotifBreakR_00[sample(1:nrow(HOXD13_SNP_SELEX_MotifBreakR_00), 50),]
+HOXD13_SNP_SELEX_MotifBreakR_select4pbm <- rbind(HOXD13_SNP_SELEX_MotifBreakR_select4pbm, HOXD13_SNP_SELEX_MotifBreakR_00_random50)
+
+# Randomly include SNPs  predicted to alter TF binding by PADIT-seq only
+HOXD13_SNP_SELEX_MotifBreakR_01 <- HOXD13_SNP_SELEX_MotifBreakR[which(HOXD13_SNP_SELEX_MotifBreakR$PBS.PADIT %in% c("0.1")),]
+table(abs(HOXD13_SNP_SELEX_MotifBreakR_01$Diff_MPRA_Activity))
+HOXD13_SNP_SELEX_MotifBreakR_01_random241 <- HOXD13_SNP_SELEX_MotifBreakR_01[sample(1:nrow(HOXD13_SNP_SELEX_MotifBreakR_01), numSNPs_toTest - nrow(HOXD13_SNP_SELEX_MotifBreakR_select4pbm)),]
+table(abs(HOXD13_SNP_SELEX_MotifBreakR_01_random241$Diff_MPRA_Activity))
+HOXD13_SNP_SELEX_MotifBreakR_select4pbm <- rbind(HOXD13_SNP_SELEX_MotifBreakR_select4pbm, HOXD13_SNP_SELEX_MotifBreakR_01_random241)
+
+# Features of the selected SNPs
+table(abs(HOXD13_SNP_SELEX_MotifBreakR_select4pbm$Diff_MPRA_Activity))
+table(HOXD13_SNP_SELEX_MotifBreakR_select4pbm$PBS.PADIT, 
+      HOXD13_SNP_SELEX_MotifBreakR_select4pbm$effect)
+
+################################ write file
+# remove column that is a list
+HOXD13_SNP_SELEX_MotifBreakR_select4pbm <- HOXD13_SNP_SELEX_MotifBreakR_select4pbm[, which(!colnames(HOXD13_SNP_SELEX_MotifBreakR_select4pbm) %in% c("motifPos"))]
+
+# trim DNA sequence to be 36 bps
+HOXD13_SNP_SELEX_MotifBreakR_select4pbm$DNA_REF_trimmed <- substr(HOXD13_SNP_SELEX_MotifBreakR_select4pbm$DNA_REF, 3, 38)
+HOXD13_SNP_SELEX_MotifBreakR_select4pbm$DNA_ALT_trimmed <- substr(HOXD13_SNP_SELEX_MotifBreakR_select4pbm$DNA_ALT, 3, 38)
+
+# write
+# write.table(HOXD13_SNP_SELEX_MotifBreakR_select4pbm, 
+#             file = "~/Desktop/AVATAR/PADIT-seq-Manuscript/Custom_PBM/Design/SNPs_toTest_with_customPBM_HOXD13.txt", 
+#             col.names = TRUE, row.names = FALSE, quote = FALSE, sep = "\t")
+
+################################ write probes
+pbm_probes <- vector()
+for(i in 1:nrow(HOXD13_SNP_SELEX_MotifBreakR_select4pbm))
+{
+  current_names <- names(pbm_probes)
+  DNA_REF_trimmed <- HOXD13_SNP_SELEX_MotifBreakR_select4pbm$DNA_REF_trimmed[i]
+  DNA_ALT_trimmed <- HOXD13_SNP_SELEX_MotifBreakR_select4pbm$DNA_ALT_trimmed[i]
+  DNA_REF_trimmed_RC <- reverse_complement(DNA_REF_trimmed)
+  DNA_ALT_trimmed_RC <- reverse_complement(DNA_ALT_trimmed)
+  pbm_probes <- c(pbm_probes, 
+                  DNA_REF_trimmed, DNA_ALT_trimmed, DNA_REF_trimmed_RC, DNA_ALT_trimmed_RC)
+  names(pbm_probes) <- c(current_names, 
+                         paste(HOXD13_SNP_SELEX_MotifBreakR_select4pbm$SNP_id[i], "REF__FWD", sep = "__"),
+                         paste(HOXD13_SNP_SELEX_MotifBreakR_select4pbm$SNP_id[i], "ALT__FWD", sep = "__"),
+                         paste(HOXD13_SNP_SELEX_MotifBreakR_select4pbm$SNP_id[i], "REF__REV", sep = "__"),
+                         paste(HOXD13_SNP_SELEX_MotifBreakR_select4pbm$SNP_id[i], "ALT__REV", sep = "__"))
+}
+
+# write probes
+pbm_probes_df <- as.data.frame(pbm_probes)
+pbm_probes_df$Probe_Names <- rownames(pbm_probes_df)
+pbm_probes_df$Probe_sequences_withPrimer <- paste(pbm_probes_df$pbm_probes, 
+                                                  Primer_sequence, 
+                                                  sep = "")
+pbm_probes_df <- pbm_probes_df[, c("Probe_Names", "Probe_sequences_withPrimer")]
+# write.table(pbm_probes_df, 
+#             file = "~/Desktop/AVATAR/PADIT-seq-Manuscript/Custom_PBM/Design/Final_Probe_sequences/SNPs_toTest_with_customPBM_HOXD13_probes.txt",
+#             col.names = TRUE, row.names = FALSE, quote = FALSE, sep = "\t")
+
+```
+
+
+
+# spot check
+```{r}
+for(i in 1:20)
+{
+  # Ref
+  Current_DNA_sequence <- pbm_probes_df$Probe_sequences_withPrimer[i]
+  Sequence_9mers_DF <- data.frame()
+  for(j in 1:(nchar(Current_DNA_sequence) - 7))
+  {
+    Sequence_9mers_DF[j, 1] <- substr(Current_DNA_sequence, j, j+7)
+  }
+  dds_results_HOXD13_df_subset <- dds_results_HOXD13_df[which(dds_results_HOXD13_df$TFBS %in% Sequence_9mers_DF$V1),]
+  dds_results_HOXD13_df_subset <- dds_results_HOXD13_df_subset[match(Sequence_9mers_DF$V1, dds_results_HOXD13_df_subset$TFBS),] 
+  dds_results_HOXD13_df_subset$Colour <- "black"
+  dds_results_HOXD13_df_subset$Colour[which(dds_results_HOXD13_df_subset$MPRAactivity == 1)] <- "red"
+  plot(1:nrow(dds_results_HOXD13_df_subset), 
+       dds_results_HOXD13_df_subset$log2FoldChange, 
+       pch = 19, type = "b", 
+       col = dds_results_HOXD13_df_subset$Colour, ylim = c(-0.5, 3.5), 
+       main = pbm_probes_df$Probe_Names[i])
+}
+```
+
+
+
+# Visualize
+```{r}
+for(i in 1:nrow(HOXD13_SNP_SELEX_MotifBreakR_select4pbm))
+{
+  # 
+  HOXD13_SNP_SELEX_MotifBreakR_select4pbm_subset <- HOXD13_SNP_SELEX_MotifBreakR_select4pbm[i,]
+  
+  # Ref
+  Current_DNA_sequence <- HOXD13_SNP_SELEX_MotifBreakR_select4pbm_subset$DNA_REF[1]
+  Sequence_9mers_DF <- data.frame()
+  for(j in 1:(nchar(Current_DNA_sequence) - 7))
+  {
+    Sequence_9mers_DF[j, 1] <- substr(Current_DNA_sequence, j, j+7)
+  }
+  dds_results_HOXD13_df_subset <- dds_results_HOXD13_df[which(dds_results_HOXD13_df$TFBS %in% Sequence_9mers_DF$V1),]
+  dds_results_HOXD13_df_subset <- dds_results_HOXD13_df_subset[match(Sequence_9mers_DF$V1, dds_results_HOXD13_df_subset$TFBS),] 
+  dds_results_HOXD13_df_subset$Colour <- "black"
+  dds_results_HOXD13_df_subset$Colour[which(dds_results_HOXD13_df_subset$MPRAactivity == 1)] <- "red"
+  plot(1:nrow(dds_results_HOXD13_df_subset), 
+       dds_results_HOXD13_df_subset$log2FoldChange, 
+       pch = 19, type = "b", 
+       col = dds_results_HOXD13_df_subset$Colour, ylim = c(-0.5, 3.5), 
+       main = paste(paste(rsid, "REF", sep = "_"), HOXD13_SNP_SELEX_MotifBreakR_select4pbm$PBS.PADIT[i], sep = "_"))
+                    
+  # Alt
+  Current_DNA_sequence <- HOXD13_SNP_SELEX_MotifBreakR_select4pbm_subset$DNA_ALT[1]
+  Sequence_9mers_DF <- data.frame()
+  for(j in 1:(nchar(Current_DNA_sequence) - 7))
+  {
+    Sequence_9mers_DF[j, 1] <- substr(Current_DNA_sequence, j, j+7)
+  }
+  dds_results_HOXD13_df_subset <- dds_results_HOXD13_df[which(dds_results_HOXD13_df$TFBS %in% Sequence_9mers_DF$V1),]
+  dds_results_HOXD13_df_subset <- dds_results_HOXD13_df_subset[match(Sequence_9mers_DF$V1, dds_results_HOXD13_df_subset$TFBS),] 
+  dds_results_HOXD13_df_subset$Colour <- "black"
+  dds_results_HOXD13_df_subset$Colour[which(dds_results_HOXD13_df_subset$MPRAactivity == 1)] <- "red"
+  plot(1:nrow(dds_results_HOXD13_df_subset), 
+       dds_results_HOXD13_df_subset$log2FoldChange, 
+       pch = 19, type = "b", 
+       col = dds_results_HOXD13_df_subset$Colour, ylim = c(-0.5, 3.5), 
+       main = paste(paste(rsid, "ALT", sep = "_"), HOXD13_SNP_SELEX_MotifBreakR_select4pbm$PBS.PADIT[i], sep = "_"))
+}
+
+
+```
+
+
+# SNP predictions and Custom PBM data
+```{r}
+# Read data frame with Alexa 488 values
+Alexa488_signal_df <- read.table("~/Desktop/AVATAR/PADIT-seq-Manuscript/Custom_PBM/Shubham_custom_PBM_Run1/PBM_experiment_HOXD13_EGR1/Alexa488_signalValues_all8chambers_formattedColumns.txt", header = TRUE)
+
+# Read table containing SNP data
+SNPs_DF_temp <- read.table("~/Desktop/AVATAR/PADIT-seq-Manuscript/Custom_PBM/Design/SNPs_toTest_with_customPBM_HOXD13.txt", header = TRUE)
+SNPs_DF <- HOXD13_SNP_SELEX_MotifBreakR[which(HOXD13_SNP_SELEX_MotifBreakR$SNP_id %in% SNPs_DF_temp$SNP_id), ]
+
+# Obtain Custom PBM data for each SNP
+for(i in 1:nrow(SNPs_DF))
+{
+  SNP <- SNPs_DF$SNP_id[i]
+  
+  # Foward
+  Fwd_or_Rev <- c("FWD", "REV")[1]
+  Alexa488_signal_df_SNP_REF <- Alexa488_signal_df[which(substr(Alexa488_signal_df$ID, 1, nchar(paste(SNP, "REF__FWD", sep = "__"))) == paste(SNP, paste("REF", Fwd_or_Rev, sep = "__"), sep = "__")), ]
+  Alexa488_signal_df_SNP_ALT <- Alexa488_signal_df[which(substr(Alexa488_signal_df$ID, 1, nchar(paste(SNP, "ALT__FWD", sep = "__"))) == paste(SNP, paste("ALT", Fwd_or_Rev, sep = "__"), sep = "__")), ]
+  CustomPBM_Median_Diff_Fwd <- log10(median(c(Alexa488_signal_df_SNP_REF$Alexa488_Chamber1_HOXD13_500nM, Alexa488_signal_df_SNP_REF$Alexa488_Chamber4_HOXD13_500nM))) - log10(median(c(Alexa488_signal_df_SNP_ALT$Alexa488_Chamber1_HOXD13_500nM, Alexa488_signal_df_SNP_ALT$Alexa488_Chamber4_HOXD13_500nM)))
+  CustomPBM_pvalue_Fwd <- t.test(log10(c(Alexa488_signal_df_SNP_REF$Alexa488_Chamber1_HOXD13_500nM, Alexa488_signal_df_SNP_REF$Alexa488_Chamber4_HOXD13_500nM)), log10(c(Alexa488_signal_df_SNP_ALT$Alexa488_Chamber1_HOXD13_500nM, Alexa488_signal_df_SNP_ALT$Alexa488_Chamber4_HOXD13_500nM)))$p.value
+  
+  # Reverse
+  Fwd_or_Rev <- c("FWD", "REV")[2]
+  Alexa488_signal_df_SNP_REF <- Alexa488_signal_df[which(substr(Alexa488_signal_df$ID, 1, nchar(paste(SNP, "REF__FWD", sep = "__"))) == paste(SNP, paste("REF", Fwd_or_Rev, sep = "__"), sep = "__")), ]
+  Alexa488_signal_df_SNP_ALT <- Alexa488_signal_df[which(substr(Alexa488_signal_df$ID, 1, nchar(paste(SNP, "ALT__FWD", sep = "__"))) == paste(SNP, paste("ALT", Fwd_or_Rev, sep = "__"), sep = "__")), ]
+  CustomPBM_Median_Diff_Rev <- log10(median(c(Alexa488_signal_df_SNP_REF$Alexa488_Chamber1_HOXD13_500nM, Alexa488_signal_df_SNP_REF$Alexa488_Chamber4_HOXD13_500nM))) - log10(median(c(Alexa488_signal_df_SNP_ALT$Alexa488_Chamber1_HOXD13_500nM, Alexa488_signal_df_SNP_ALT$Alexa488_Chamber4_HOXD13_500nM)))
+  CustomPBM_pvalue_Rev <- t.test(log10(c(Alexa488_signal_df_SNP_REF$Alexa488_Chamber1_HOXD13_500nM, Alexa488_signal_df_SNP_REF$Alexa488_Chamber4_HOXD13_500nM)), log10(c(Alexa488_signal_df_SNP_ALT$Alexa488_Chamber1_HOXD13_500nM, Alexa488_signal_df_SNP_ALT$Alexa488_Chamber4_HOXD13_500nM)))$p.value
+  
+  # Choose orientation with lowest p-value and assign to DF
+  if(CustomPBM_pvalue_Fwd < CustomPBM_pvalue_Rev)
+  {
+    SNPs_DF$CustomPBM_Median_Diff[i] <- CustomPBM_Median_Diff_Fwd
+    SNPs_DF$CustomPBM_pvalue[i] <- CustomPBM_pvalue_Fwd
+  }
+  if(CustomPBM_pvalue_Fwd >= CustomPBM_pvalue_Rev)
+  {
+    SNPs_DF$CustomPBM_Median_Diff[i] <- CustomPBM_Median_Diff_Rev
+    SNPs_DF$CustomPBM_pvalue[i] <- CustomPBM_pvalue_Rev
+  }
+}
+
+# FDR
+SNPs_DF$CustomPBM_pvalue_adj <- p.adjust(SNPs_DF$CustomPBM_pvalue, method = "fdr")
+table(SNPs_DF$CustomPBM_pvalue_adj < 0.05)
+
+```
+
+
+
+
+
+```{r}
+# Assign Colour
+SNPs_DF$Colour <- "black"
+SNPs_DF$Colour[which(SNPs_DF$CustomPBM_pvalue_adj < 0.05)] <- "red"
+SNPs_DF$Colour[which(SNPs_DF$PADIT_prediction == 1)] <- "green"
+SNPs_DF$Colour[which(SNPs_DF$PBS_sig == 1)] <- "blue"
+
+# Compare to SNP-SELEX PBS 
+plot(SNPs_DF$pbs, 
+     SNPs_DF$CustomPBM_Median_Diff, 
+     pch = 19, cex = 1, col = SNPs_DF$Colour)
+abline(h = 0, col = "black")
+abline(v = 0, col = "black")
+cor.test(SNPs_DF$pbs, SNPs_DF$CustomPBM_Median_Diff)
+
+# Compare to PADIT-seq predictions
+plot(SNPs_DF$Diff_log2FC, 
+     SNPs_DF$CustomPBM_Median_Diff, 
+     pch = 19, cex = 1, col = SNPs_DF$Colour)
+abline(h = 0, col = "black")
+abline(v = 0, col = "black")
+cor.test(SNPs_DF$Diff_log2FC, 
+         SNPs_DF$CustomPBM_Median_Diff)
+
+# Compare to PADIT-seq predictions
+plot(SNPs_DF$Diff_log2FC[which(SNPs_DF$PBS.PADIT != 1.1)], 
+     SNPs_DF$CustomPBM_Median_Diff[which(SNPs_DF$PBS.PADIT != 1.1)], 
+     pch = 19, cex = 1, col = SNPs_DF$Colour[which(SNPs_DF$PBS.PADIT != 1.1)])
+abline(h = 0, col = "black")
+abline(v = 0, col = "black")
+cor.test(SNPs_DF$Diff_log2FC[which(SNPs_DF$PBS.PADIT != 1.1)], 
+         SNPs_DF$CustomPBM_Median_Diff[which(SNPs_DF$PBS.PADIT != 1.1)])
+
+# Compare to PADIT-seq predictions
+plot(SNPs_DF$Diff_log2FC[which(SNPs_DF$PBS.PADIT == 0.1)], 
+     SNPs_DF$CustomPBM_Median_Diff[which(SNPs_DF$PBS.PADIT == 0.1)], 
+     pch = 19, cex = 1, col = SNPs_DF$Colour[which(SNPs_DF$PBS.PADIT == 0.1)])
+abline(h = 0, col = "black")
+abline(v = 0, col = "black")
+cor.test(SNPs_DF$Diff_log2FC[which(SNPs_DF$PBS.PADIT == 0.1)], 
+         SNPs_DF$CustomPBM_Median_Diff[which(SNPs_DF$PBS.PADIT == 0.1)])
+
+# Compare to PADIT-seq predictions
+plot(SNPs_DF$Diff_log2FC[which(SNPs_DF$PBS.PADIT %in% c(0.1, 1.1) )], 
+     SNPs_DF$CustomPBM_Median_Diff[which(SNPs_DF$PBS.PADIT %in% c(0.1, 1.1))], 
+     pch = 19, cex = 1, col = SNPs_DF$Colour[which(SNPs_DF$PBS.PADIT %in% c(0.1, 1.1) )])
+abline(h = 0, col = "black")
+abline(v = 0, col = "black")
+cor.test(SNPs_DF$Diff_log2FC[which(SNPs_DF$PBS.PADIT %in% c(0.1, 1.1))], 
+         SNPs_DF$CustomPBM_Median_Diff[which(SNPs_DF$PBS.PADIT %in% c(0.1, 1.1))])
+
+# Compare to PADIT-seq predictions
+plot(SNPs_DF$Diff_log2FC[which(SNPs_DF$PBS.PADIT == 0)], 
+     SNPs_DF$CustomPBM_Median_Diff[which(SNPs_DF$PBS.PADIT == 0)], 
+     pch = 19, cex = 1, col = SNPs_DF$Colour)
+abline(h = 0, col = "black")
+abline(v = 0, col = "black")
+cor.test(SNPs_DF$Diff_log2FC[which(SNPs_DF$PBS.PADIT == 0)], 
+         SNPs_DF$CustomPBM_Median_Diff[which(SNPs_DF$PBS.PADIT == 0)])
+
+# Compare to MotifBreakR predictions
+plot(SNPs_DF$alleleEffectSize, 
+     SNPs_DF$CustomPBM_Median_Diff, 
+     pch = 19, cex = 1, col = SNPs_DF$Colour)
+abline(h = 0, col = "black")
+cor.test(SNPs_DF$alleleEffectSize, SNPs_DF$CustomPBM_Median_Diff)
+
+# Compare to MotifBreakR predictions
+plot(SNPs_DF$alleleEffectSize[which(SNPs_DF$effect == "none")], 
+     SNPs_DF$CustomPBM_Median_Diff[which(SNPs_DF$effect == "none")], 
+     pch = 19, cex = 1, col = SNPs_DF$Colour)
+abline(h = 0, col = "black")
+cor.test(SNPs_DF$alleleEffectSize[which(SNPs_DF$effect == "none")], 
+         SNPs_DF$CustomPBM_Median_Diff[which(SNPs_DF$effect == "none")])
+
+# Compare to MotifBreakR predictions
+plot(SNPs_DF$alleleEffectSize[which(SNPs_DF$effect %in% c("strong", "weak"))], 
+     SNPs_DF$CustomPBM_Median_Diff[which(SNPs_DF$effect %in% c("strong", "weak"))], 
+     pch = 19, cex = 1, col = SNPs_DF$Colour)
+abline(h = 0, col = "black")
+cor.test(SNPs_DF$alleleEffectSize[which(SNPs_DF$effect %in% c("strong", "weak"))], 
+         SNPs_DF$CustomPBM_Median_Diff[which(SNPs_DF$effect %in% c("strong", "weak"))])
+```
+
+

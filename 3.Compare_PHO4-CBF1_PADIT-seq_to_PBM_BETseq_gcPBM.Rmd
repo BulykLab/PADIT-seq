@@ -1,0 +1,834 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+
+```{r}
+# Please change the working directory
+Working_dir <- "~/Desktop/AVATAR/PADIT-seq-Manuscript/Code_Availability_Revision/"
+
+# Please be sure to install these libraries
+library(pheatmap); library(ggplot2); library(DESeq2); library(ggrepel); library("stringr")
+
+# FDR cutoff (do not change)
+Cutoff_Value <- 0.05
+```
+
+
+# Compare PBM E-scores and PADIT-seq 8mer log2FC (PHO4)
+```{r}
+# Read PHO4 PBM data
+PHO4_PBM_Escores_v1 <- read.table(paste(paste(Working_dir, "Input_Files/PBM_data_PHO4", sep = "/"), "Pho4_Zhu_v1_8mers_11111111.txt", sep = "/"), header = TRUE)
+PHO4_PBM_Escores_v2 <- read.table(paste(paste(Working_dir, "Input_Files/PBM_data_PHO4", sep = "/"), "Pho4_Zhu_v2_8mers_11111111.txt", sep = "/"), header = TRUE)
+PHO4_PBM_Escores_TEMP <- merge(PHO4_PBM_Escores_v1, PHO4_PBM_Escores_v2, by = "X8.mer")
+PHO4_PBM_Escores_TEMP$E.score <- apply(PHO4_PBM_Escores_TEMP[, c("E.score.x", "E.score.y")], 1, median)
+PHO4_PBM_Escores_TEMP$Z.score <- apply(PHO4_PBM_Escores_TEMP[, c("Z.score.x", "Z.score.y")], 1, median)
+PHO4_PBM_Escores <- PHO4_PBM_Escores_TEMP[, c("X8.mer", "X8.mer.1.x", "E.score", "Z.score")]; rm(PHO4_PBM_Escores_TEMP)
+colnames(PHO4_PBM_Escores) <- c("X8.mer", "X8.mer.1", "E.score", "Z.score")
+
+# Read PHO4 8-mer PADIT-seq log2foldchange values for the 3 registers
+Register_1_8 <- read.table(paste(paste(Working_dir, "Output_Files/Median_kmer_log2FC", sep = "/"), "PHO4_all8mers_1_8_median.txt", sep = "/"), header = TRUE)
+Register_2_9 <- read.table(paste(paste(Working_dir, "Output_Files/Median_kmer_log2FC", sep = "/"), "PHO4_all8mers_2_9_median.txt", sep = "/"), header = TRUE)
+Register_3_10 <- read.table(paste(paste(Working_dir, "Output_Files/Median_kmer_log2FC", sep = "/"), "PHO4_all8mers_3_10_median.txt", sep = "/"), header = TRUE)
+
+# Re-define MPRAactivity
+Register_1_8$MPRAactivity <- (Register_1_8$log2FoldChange > 0 & Register_1_8$padj < Cutoff_Value)*1
+Register_2_9$MPRAactivity <- (Register_2_9$log2FoldChange > 0 & Register_2_9$padj < Cutoff_Value)*1
+Register_3_10$MPRAactivity <- (Register_3_10$log2FoldChange > 0 & Register_3_10$padj < Cutoff_Value)*1
+
+# Number of red points?
+table(Register_1_8$MPRAactivity)
+table(Register_2_9$MPRAactivity)
+table(Register_3_10$MPRAactivity)
+
+# Fraction of red points?
+sum((Register_1_8$MPRAactivity == 1)*1)/nrow(Register_1_8)
+sum((Register_2_9$MPRAactivity == 1)*1)/nrow(Register_2_9)
+sum((Register_3_10$MPRAactivity == 1)*1)/nrow(Register_3_10)
+
+################################################################# Average of all 3 registers
+# Format
+colnames(Register_1_8) <- paste(colnames(Register_1_8), "1_8", sep = "_")
+colnames(Register_2_9) <- paste(colnames(Register_2_9), "2_9", sep = "_")
+colnames(Register_3_10) <- paste(colnames(Register_3_10), "3_10", sep = "_")
+TEMP1 <- merge(Register_1_8, Register_2_9, 
+               by.x = "X8.mer_1_8", by.y = "X8.mer_2_9")
+TEMP2 <- merge(TEMP1, Register_3_10, 
+               by.x = "X8.mer_1_8", by.y = "X8.mer_3_10")
+PHO4_PBM_Escores_PADIT <- TEMP2; rm(TEMP1); rm(TEMP2)
+
+# Define Median values
+PHO4_PBM_Escores_PADIT$Median_baseMean <- apply(PHO4_PBM_Escores_PADIT[,c("baseMean_1_8", "baseMean_2_9", "baseMean_3_10")], 1, median)
+PHO4_PBM_Escores_PADIT$Mean_log2FC <- apply(PHO4_PBM_Escores_PADIT[,c("log2FoldChange_1_8", "log2FoldChange_2_9", "log2FoldChange_3_10")], 1, median)
+PHO4_PBM_Escores_PADIT$padj <- apply(PHO4_PBM_Escores_PADIT[,c("padj_1_8", "padj_2_9", "padj_3_10")], 1, median)
+PHO4_PBM_Escores_PADIT$MPRAactivity <- apply(PHO4_PBM_Escores_PADIT[,c("MPRAactivity_1_8", "MPRAactivity_2_9", "MPRAactivity_3_10")], 1, median)
+
+# Account for the effect of flanking nucleotides
+PHO4_PBM_Escores_PADIT$Median_baseMean <- ifelse(substr(PHO4_PBM_Escores_PADIT$X8.mer_1_8, 1, 4) == "ACGT" | substr(PHO4_PBM_Escores_PADIT$X8.mer.1_1_8, 1, 4) == "ACGT",
+                                                 PHO4_PBM_Escores_PADIT$baseMean_2_9,
+                                                 PHO4_PBM_Escores_PADIT$Median_baseMean)
+PHO4_PBM_Escores_PADIT$Mean_log2FC <- ifelse(substr(PHO4_PBM_Escores_PADIT$X8.mer_1_8, 1, 4) == "ACGT" | substr(PHO4_PBM_Escores_PADIT$X8.mer.1_1_8, 1, 4) == "ACGT",
+                                                 PHO4_PBM_Escores_PADIT$log2FoldChange_2_9,
+                                                 PHO4_PBM_Escores_PADIT$Mean_log2FC)
+PHO4_PBM_Escores_PADIT$padj <- ifelse(substr(PHO4_PBM_Escores_PADIT$X8.mer_1_8, 1, 4) == "ACGT" | substr(PHO4_PBM_Escores_PADIT$X8.mer.1_1_8, 1, 4) == "ACGT",
+                                                 PHO4_PBM_Escores_PADIT$padj_2_9,
+                                                 PHO4_PBM_Escores_PADIT$padj)
+PHO4_PBM_Escores_PADIT$MPRAactivity <- ifelse(substr(PHO4_PBM_Escores_PADIT$X8.mer_1_8, 1, 4) == "ACGT" | substr(PHO4_PBM_Escores_PADIT$X8.mer.1_1_8, 1, 4) == "ACGT",
+                                                 PHO4_PBM_Escores_PADIT$MPRAactivity_2_9,
+                                                 PHO4_PBM_Escores_PADIT$MPRAactivity)
+
+# Add PBM E-scores and Z-scores
+TEMP <- merge(PHO4_PBM_Escores, PHO4_PBM_Escores_PADIT, 
+              by.x = "X8.mer", by.y = "X8.mer_1_8")
+PHO4_PBM_Escores_PADIT <- TEMP; rm(TEMP)
+
+# Define colours
+PHO4_PBM_Escores_PADIT$Colour <- "black"
+PHO4_PBM_Escores_PADIT$Colour[which(PHO4_PBM_Escores_PADIT$MPRAactivity == 1)] <- "red"
+
+# Plot (against e-scores)
+PHO4_PBM_Escores_PADIT_subset <- PHO4_PBM_Escores_PADIT[which(PHO4_PBM_Escores_PADIT$Median_baseMean > 13), ]
+plot(PHO4_PBM_Escores_PADIT_subset$E.score[which(PHO4_PBM_Escores_PADIT_subset$Colour == "black")], 
+     PHO4_PBM_Escores_PADIT_subset$Mean_log2FC[which(PHO4_PBM_Escores_PADIT_subset$Colour == "black")], 
+     cex = 0.75, pch = 19, cex.axis = 2, cex.lab = 2,
+     col = "black", 
+     xlim = c(-0.5, 0.5), ylim = c(-0.5, 5.75), 
+     xlab = "E-score", ylab = "PADIT-seq log2 (ALFA-PHO4 / No-DBD)")
+points(PHO4_PBM_Escores_PADIT_subset$E.score[which(PHO4_PBM_Escores_PADIT_subset$Colour == "red")], 
+       PHO4_PBM_Escores_PADIT_subset$Mean_log2FC[which(PHO4_PBM_Escores_PADIT_subset$Colour == "red")],
+       cex = 0.75, pch = 19, col = "red")
+abline(h = 0, col = "red")
+table(PHO4_PBM_Escores_PADIT$Colour)
+cor.test(PHO4_PBM_Escores_PADIT_subset$E.score, PHO4_PBM_Escores_PADIT_subset$Mean_log2FC)
+
+# Plot (against Z-scores)
+PHO4_PBM_Escores_PADIT_subset <- PHO4_PBM_Escores_PADIT[which(PHO4_PBM_Escores_PADIT$Median_baseMean > 10), ]
+plot(PHO4_PBM_Escores_PADIT_subset$Z.score[which(PHO4_PBM_Escores_PADIT_subset$Colour == "black")], 
+     PHO4_PBM_Escores_PADIT_subset$Mean_log2FC[which(PHO4_PBM_Escores_PADIT_subset$Colour == "black")], 
+     cex = 0.5, pch = 19, cex.axis = 2, cex.lab = 2,
+     col = "black", 
+     xlim = c(-3.4, 20), ylim = c(-0.5, 5.75), 
+     xlab = "Z-score", ylab = "PADIT-seq log2 (ALFA-PHO4 / No-DBD)")
+points(PHO4_PBM_Escores_PADIT_subset$Z.score[which(PHO4_PBM_Escores_PADIT_subset$Colour == "red")], 
+       PHO4_PBM_Escores_PADIT_subset$Mean_log2FC[which(PHO4_PBM_Escores_PADIT_subset$Colour == "red")],
+       cex = 0.5, pch = 19, col = "red")
+abline(h = 0, col = "red")
+cor.test(PHO4_PBM_Escores_PADIT_subset$Z.score, PHO4_PBM_Escores_PADIT_subset$Mean_log2FC)
+
+################################################################# AUC Analysis
+library("DescTools")
+Columns_To_Plot <- c("E.score", "Z.score")
+for(k in 1:length(Columns_To_Plot))
+{
+  thresholds <- seq(min(PHO4_PBM_Escores_PADIT[, Columns_To_Plot[k]]), 
+                    max(PHO4_PBM_Escores_PADIT[, Columns_To_Plot[k]]), length.out = 5000)
+  fraction_red <- vector()
+  fraction_black <- vector()
+  for(i in 1:length(thresholds))
+  {
+    PHO4_PBM_Escores_PADIT$AboveThreshold <- (PHO4_PBM_Escores_PADIT[, Columns_To_Plot[k]] > thresholds[i])*1
+    fraction_red[i] <- nrow(PHO4_PBM_Escores_PADIT[which(PHO4_PBM_Escores_PADIT$MPRAactivity == 1 & PHO4_PBM_Escores_PADIT$AboveThreshold == 1),])
+    fraction_black[i] <- nrow(PHO4_PBM_Escores_PADIT[which(PHO4_PBM_Escores_PADIT$MPRAactivity != 1 & PHO4_PBM_Escores_PADIT$AboveThreshold == 1),])
+  }
+  
+  # print AUC
+  # print AUC
+  DF <- cbind(xvalues = fraction_black/(nrow(PHO4_PBM_Escores_PADIT) - sum(PHO4_PBM_Escores_PADIT$MPRAactivity)), 
+              yvalues = fraction_red/sum(PHO4_PBM_Escores_PADIT$MPRAactivity))
+  DF <- as.data.frame(DF)
+  DF <- DF[order(DF$xvalues, decreasing = FALSE),]
+  DF <- rbind(DF, c(1, 1))
+  print(suppressWarnings(AUC(DF$xvalues, DF$yvalues)))
+  
+  # plot
+  if(k == 1)
+  {
+    # Plot AUC curve
+    plot(fraction_black/(nrow(PHO4_PBM_Escores_PADIT) - sum(PHO4_PBM_Escores_PADIT$MPRAactivity)), 
+         fraction_red/sum(PHO4_PBM_Escores_PADIT$MPRAactivity), 
+         type = "l", col = "black")
+    abline(a = 0, b = 1, col = "black")
+  }
+  if(k == 2)
+  {
+    # Plot AUC curve
+    points(fraction_black/(nrow(PHO4_PBM_Escores_PADIT) - sum(PHO4_PBM_Escores_PADIT$MPRAactivity)), 
+         fraction_red/sum(PHO4_PBM_Escores_PADIT$MPRAactivity), 
+         type = "l", col = "cyan3")
+  }
+}
+
+```
+
+
+
+
+# Compare PADIT-seq 8mer log2FC and BET-seq ddG (PHO4)
+```{r}
+############################################
+# Format PADIT-seq data
+TEMP <- PHO4_PBM_Escores_PADIT[, c("X8.mer.1", "E.score", "Z.score", "Mean_log2FC", "padj", "MPRAactivity")]
+colnames(TEMP) <- c("X8.mer", "E.score", "Z.score", "Mean_log2FC", "padj", "MPRAactivity")
+PHO4_PBM_Escores_PADIT_df <- rbind(PHO4_PBM_Escores_PADIT[, c("X8.mer", "E.score", "Z.score", "Mean_log2FC", "padj", "MPRAactivity")], 
+                                   TEMP); rm(TEMP)
+
+# Read BET-seq data
+BET_seq_data <- read.csv(paste(paste(Working_dir, "Input_Files/BETseq_processed_data/Manuscript_Data", sep = "/"), "all_predicted_ddGs.csv", sep = "/"), header = TRUE)
+BET_seq_data$kmer_16 <- paste(paste(substr(BET_seq_data$flank, 1, 5), "CACGTG", sep = ""), substr(BET_seq_data$flank, 6, 10), sep = "")
+
+# Tiling
+numActive_DF <- BET_seq_data
+for(i in 1:9)
+{
+  Current_8mers <- substr(BET_seq_data$kmer_16, i, i + 7)
+  Current_8mers_DF <- PHO4_PBM_Escores_PADIT_df[match(Current_8mers, PHO4_PBM_Escores_PADIT_df$X8.mer), ]
+  BET_seq_data[, i + 4] <- Current_8mers_DF$Mean_log2FC
+  numActive_DF[, i + 4] <- Current_8mers_DF$MPRAactivity
+}
+colnames(BET_seq_data) <- c("flank",  "Cbf1_ddG",  "Pho4_ddG", "kmer_16", paste("tiling_log2FC", 1:9, sep = "_"))
+colnames(numActive_DF) <- c("flank",  "Cbf1_ddG",  "Pho4_ddG", "kmer_16", paste("tiling_MPRAactivity", 1:9, sep = "_"))
+
+# Define relevant variables
+BET_seq_data$sumLog2FC <- apply(BET_seq_data[, paste("tiling_log2FC", 1:9, sep = "_")], 1, sum)
+BET_seq_data$numActive <- apply(numActive_DF[, paste("tiling_MPRAactivity", 1:9, sep = "_")], 1, sum)
+table(BET_seq_data$numActive)
+
+############################################# Boxplot
+boxplot(BET_seq_data$Pho4_ddG ~ BET_seq_data$numActive, 
+        notch = TRUE, outline = FALSE)
+pairwise.wilcox.test(BET_seq_data$Pho4_ddG , BET_seq_data$numActive)
+
+############################################ Scatter plot
+plot(BET_seq_data$sumLog2FC, 
+     BET_seq_data$Pho4_ddG, 
+     pch = 19, cex = 0.25,
+     xlab = "PADIT-seq log2FC (Pho4)", 
+     ylab = "ddG (Pho4)")
+
+# Correlation?
+cor.test(BET_seq_data$sumLog2FC, BET_seq_data$Pho4_ddG)
+
+# Linear model explains 82.5% of the variance (FDR 5%); 82.5% of the variance (FDR 1%)
+summary(lm(BET_seq_data$Pho4_ddG ~ BET_seq_data$sumLog2FC))
+
+```
+
+
+
+# Compare PBM E-scores and PADIT-seq 8mer log2FC (CBF1)
+```{r}
+# Read CBF1 PBM data (v1?)
+CBF1_PBM_Escores <- read.table(paste(paste(Working_dir, "Input_Files/PBM_data_CBF1", sep = "/"), "Cbf1_Zhu_v1_8mers_11111111.txt", sep = "/"), header = TRUE)
+
+# Read CBF1 8-mer PADIT-seq log2foldchange values for the 3 registers
+Register_1_8 <- read.table(paste(paste(Working_dir, "Output_Files/Median_kmer_log2FC", sep = "/"), "CBF1_all8mers_1_8_median.txt", sep = "/"), header = TRUE)
+Register_2_9 <- read.table(paste(paste(Working_dir, "Output_Files/Median_kmer_log2FC", sep = "/"), "CBF1_all8mers_2_9_median.txt", sep = "/"), header = TRUE)
+Register_3_10 <- read.table(paste(paste(Working_dir, "Output_Files/Median_kmer_log2FC", sep = "/"), "CBF1_all8mers_3_10_median.txt", sep = "/"), header = TRUE)
+
+# Re-define MPRAactivity
+Register_1_8$MPRAactivity <- (Register_1_8$log2FoldChange > 0 & Register_1_8$padj < Cutoff_Value)*1
+Register_2_9$MPRAactivity <- (Register_2_9$log2FoldChange > 0 & Register_2_9$padj < Cutoff_Value)*1
+Register_3_10$MPRAactivity <- (Register_3_10$log2FoldChange > 0 & Register_3_10$padj < Cutoff_Value)*1
+
+# Number of red points?
+table(Register_1_8$MPRAactivity)
+table(Register_2_9$MPRAactivity)
+table(Register_3_10$MPRAactivity)
+
+# Fraction of red points?
+sum((Register_1_8$MPRAactivity == 1)*1)/nrow(Register_1_8)
+sum((Register_2_9$MPRAactivity == 1)*1)/nrow(Register_2_9)
+sum((Register_3_10$MPRAactivity == 1)*1)/nrow(Register_3_10)
+
+################################################################# Average of all 3 registers
+# Format
+colnames(Register_1_8) <- paste(colnames(Register_1_8), "1_8", sep = "_")
+colnames(Register_2_9) <- paste(colnames(Register_2_9), "2_9", sep = "_")
+colnames(Register_3_10) <- paste(colnames(Register_3_10), "3_10", sep = "_")
+TEMP1 <- merge(Register_1_8, Register_2_9, 
+               by.x = "X8.mer_1_8", by.y = "X8.mer_2_9")
+TEMP2 <- merge(TEMP1, Register_3_10, 
+               by.x = "X8.mer_1_8", by.y = "X8.mer_3_10")
+CBF1_PBM_Escores_PADIT <- TEMP2; rm(TEMP1); rm(TEMP2)
+
+# Define Median values
+CBF1_PBM_Escores_PADIT$Median_baseMean <- apply(CBF1_PBM_Escores_PADIT[,c("baseMean_1_8", "baseMean_2_9", "baseMean_3_10")], 1, median)
+CBF1_PBM_Escores_PADIT$Mean_log2FC <- apply(CBF1_PBM_Escores_PADIT[,c("log2FoldChange_1_8", "log2FoldChange_2_9", "log2FoldChange_3_10")], 1, median)
+CBF1_PBM_Escores_PADIT$padj <- apply(CBF1_PBM_Escores_PADIT[,c("padj_1_8", "padj_2_9", "padj_3_10")], 1, median)
+CBF1_PBM_Escores_PADIT$MPRAactivity <- apply(CBF1_PBM_Escores_PADIT[,c("MPRAactivity_1_8", "MPRAactivity_2_9", "MPRAactivity_3_10")], 1, median)
+
+# Account for the effect of flanking nucleotides
+CBF1_PBM_Escores_PADIT$Median_baseMean <- ifelse(substr(CBF1_PBM_Escores_PADIT$X8.mer_1_8, 1, 4) == "ACGT" | substr(CBF1_PBM_Escores_PADIT$X8.mer.1_1_8, 1, 4) == "ACGT",
+                                                 CBF1_PBM_Escores_PADIT$baseMean_2_9,
+                                                 CBF1_PBM_Escores_PADIT$Median_baseMean)
+CBF1_PBM_Escores_PADIT$Mean_log2FC <- ifelse(substr(CBF1_PBM_Escores_PADIT$X8.mer_1_8, 1, 4) == "ACGT" | substr(CBF1_PBM_Escores_PADIT$X8.mer.1_1_8, 1, 4) == "ACGT",
+                                                 CBF1_PBM_Escores_PADIT$log2FoldChange_2_9,
+                                                 CBF1_PBM_Escores_PADIT$Mean_log2FC)
+CBF1_PBM_Escores_PADIT$padj <- ifelse(substr(CBF1_PBM_Escores_PADIT$X8.mer_1_8, 1, 4) == "ACGT" | substr(CBF1_PBM_Escores_PADIT$X8.mer.1_1_8, 1, 4) == "ACGT",
+                                                 CBF1_PBM_Escores_PADIT$padj_2_9,
+                                                 CBF1_PBM_Escores_PADIT$padj)
+CBF1_PBM_Escores_PADIT$MPRAactivity <- ifelse(substr(CBF1_PBM_Escores_PADIT$X8.mer_1_8, 1, 4) == "ACGT" | substr(CBF1_PBM_Escores_PADIT$X8.mer.1_1_8, 1, 4) == "ACGT",
+                                                 CBF1_PBM_Escores_PADIT$MPRAactivity_2_9,
+                                                 CBF1_PBM_Escores_PADIT$MPRAactivity)
+
+# Add PBM E-scores and Z-scores
+TEMP <- merge(CBF1_PBM_Escores, CBF1_PBM_Escores_PADIT, 
+              by.x = "X8.mer", by.y = "X8.mer_1_8")
+CBF1_PBM_Escores_PADIT <- TEMP; rm(TEMP)
+
+# Define colours
+CBF1_PBM_Escores_PADIT$Colour <- "black"
+CBF1_PBM_Escores_PADIT$Colour[which(CBF1_PBM_Escores_PADIT$MPRAactivity == 1)] <- "red"
+
+# Plot (against e-scores)
+CBF1_PBM_Escores_PADIT_subset <- CBF1_PBM_Escores_PADIT[which(CBF1_PBM_Escores_PADIT$Median_baseMean > 20), ]
+plot(CBF1_PBM_Escores_PADIT_subset$E.score[which(CBF1_PBM_Escores_PADIT_subset$Colour == "black")], 
+     CBF1_PBM_Escores_PADIT_subset$Mean_log2FC[which(CBF1_PBM_Escores_PADIT_subset$Colour == "black")], 
+     cex = 0.75, pch = 19, cex.axis = 2, cex.lab = 2,
+     col = "black", 
+     xlim = c(-0.5, 0.5), ylim = c(-0.5, 5.75), 
+     xlab = "E-score", ylab = "PADIT-seq log2 (ALFA-CBF1 / No-DBD)")
+points(CBF1_PBM_Escores_PADIT_subset$E.score[which(CBF1_PBM_Escores_PADIT_subset$Colour == "red")], 
+       CBF1_PBM_Escores_PADIT_subset$Mean_log2FC[which(CBF1_PBM_Escores_PADIT_subset$Colour == "red")],
+       cex = 0.75, pch = 19, col = "red")
+abline(h = 0, col = "red")
+table(CBF1_PBM_Escores_PADIT$Colour)
+cor.test(CBF1_PBM_Escores_PADIT_subset$E.score, CBF1_PBM_Escores_PADIT_subset$Mean_log2FC)
+
+# Plot (against Z-scores)
+CBF1_PBM_Escores_PADIT_subset <- CBF1_PBM_Escores_PADIT[which(CBF1_PBM_Escores_PADIT$Median_baseMean > 20), ]
+plot(CBF1_PBM_Escores_PADIT_subset$Z.score[which(CBF1_PBM_Escores_PADIT_subset$Colour == "black")], 
+     CBF1_PBM_Escores_PADIT_subset$Mean_log2FC[which(CBF1_PBM_Escores_PADIT_subset$Colour == "black")], 
+     cex = 0.5, pch = 19, cex.axis = 2, cex.lab = 2,
+     col = "black", 
+     xlim = c(-3.4, 40), ylim = c(-0.5, 5.75), 
+     xlab = "Z-score", ylab = "PADIT-seq log2 (ALFA-CBF1 / No-DBD)")
+points(CBF1_PBM_Escores_PADIT_subset$Z.score[which(CBF1_PBM_Escores_PADIT_subset$Colour == "red")], 
+       CBF1_PBM_Escores_PADIT_subset$Mean_log2FC[which(CBF1_PBM_Escores_PADIT_subset$Colour == "red")],
+       cex = 0.5, pch = 19, col = "red")
+abline(h = 0, col = "red")
+cor.test(CBF1_PBM_Escores_PADIT_subset$Z.score, CBF1_PBM_Escores_PADIT_subset$Mean_log2FC)
+
+################################################################# AUC Analysis
+library("DescTools")
+Columns_To_Plot <- c("E.score", "Z.score")
+for(k in 1:length(Columns_To_Plot))
+{
+  thresholds <- seq(min(CBF1_PBM_Escores_PADIT[, Columns_To_Plot[k]]), 
+                    max(CBF1_PBM_Escores_PADIT[, Columns_To_Plot[k]]), length.out = 5000)
+  fraction_red <- vector()
+  fraction_black <- vector()
+  for(i in 1:length(thresholds))
+  {
+    CBF1_PBM_Escores_PADIT$AboveThreshold <- (CBF1_PBM_Escores_PADIT[, Columns_To_Plot[k]] > thresholds[i])*1
+    fraction_red[i] <- nrow(CBF1_PBM_Escores_PADIT[which(CBF1_PBM_Escores_PADIT$MPRAactivity == 1 & CBF1_PBM_Escores_PADIT$AboveThreshold == 1),])
+    fraction_black[i] <- nrow(CBF1_PBM_Escores_PADIT[which(CBF1_PBM_Escores_PADIT$MPRAactivity != 1 & CBF1_PBM_Escores_PADIT$AboveThreshold == 1),])
+  }
+  
+  # print AUC
+  # print AUC
+  DF <- cbind(xvalues = fraction_black/(nrow(CBF1_PBM_Escores_PADIT) - sum(CBF1_PBM_Escores_PADIT$MPRAactivity)), 
+              yvalues = fraction_red/sum(CBF1_PBM_Escores_PADIT$MPRAactivity))
+  DF <- as.data.frame(DF)
+  DF <- DF[order(DF$xvalues, decreasing = FALSE),]
+  DF <- rbind(DF, c(1, 1))
+  print(suppressWarnings(AUC(DF$xvalues, DF$yvalues)))
+  
+  # plot
+  if(k == 1)
+  {
+    # Plot AUC curve
+    plot(fraction_black/(nrow(CBF1_PBM_Escores_PADIT) - sum(CBF1_PBM_Escores_PADIT$MPRAactivity)), 
+         fraction_red/sum(CBF1_PBM_Escores_PADIT$MPRAactivity), 
+         type = "l", col = "black")
+    abline(a = 0, b = 1, col = "black")
+  }
+  if(k == 2)
+  {
+    # Plot AUC curve
+    points(fraction_black/(nrow(CBF1_PBM_Escores_PADIT) - sum(CBF1_PBM_Escores_PADIT$MPRAactivity)), 
+         fraction_red/sum(CBF1_PBM_Escores_PADIT$MPRAactivity), 
+         type = "l", col = "cyan3")
+  }
+}
+
+
+```
+
+
+# Compare PADIT-seq 8mer log2FC and BET-seq ddG (CBF1)
+```{r}
+############################################
+# Format PADIT-seq data
+TEMP <- CBF1_PBM_Escores_PADIT[, c("X8.mer.1", "E.score", "Z.score", "Mean_log2FC", "padj", "MPRAactivity")]
+colnames(TEMP) <- c("X8.mer", "E.score", "Z.score", "Mean_log2FC", "padj", "MPRAactivity")
+CBF1_PBM_Escores_PADIT_df <- rbind(CBF1_PBM_Escores_PADIT[, c("X8.mer", "E.score", "Z.score", "Mean_log2FC", "padj", "MPRAactivity")], 
+                                   TEMP); rm(TEMP)
+
+# Read BET-seq data
+BET_seq_data <- read.csv(paste(paste(Working_dir, "Input_Files/BETseq_processed_data/Manuscript_Data", sep = "/"), "all_predicted_ddGs.csv", sep = "/"), header = TRUE)
+BET_seq_data$kmer_16 <- paste(paste(substr(BET_seq_data$flank, 1, 5), "CACGTG", sep = ""), substr(BET_seq_data$flank, 6, 10), sep = "")
+
+# Tiling
+numActive_DF <- BET_seq_data
+for(i in 1:9)
+{
+  Current_8mers <- substr(BET_seq_data$kmer_16, i, i + 7)
+  Current_8mers_DF <- CBF1_PBM_Escores_PADIT_df[match(Current_8mers, CBF1_PBM_Escores_PADIT_df$X8.mer), ]
+  BET_seq_data[, i + 4] <- Current_8mers_DF$Mean_log2FC
+  numActive_DF[, i + 4] <- Current_8mers_DF$MPRAactivity
+}
+colnames(BET_seq_data) <- c("flank",  "Cbf1_ddG",  "Pho4_ddG", "kmer_16", paste("tiling_log2FC", 1:9, sep = "_"))
+colnames(numActive_DF) <- c("flank",  "Cbf1_ddG",  "Pho4_ddG", "kmer_16", paste("tiling_MPRAactivity", 1:9, sep = "_"))
+
+# log2FC of active 8-mers only?
+# BET_seq_data[, paste("tiling_log2FC", 1:9, sep = "_")] <- BET_seq_data[, paste("tiling_log2FC", 1:9, sep = "_")]*numActive_DF[, paste("tiling_MPRAactivity", 1:9, sep = "_")]
+
+# Define relevant variables
+BET_seq_data$sumLog2FC <- apply(BET_seq_data[, paste("tiling_log2FC", 1:9, sep = "_")], 1, sum)
+BET_seq_data$numActive <- apply(numActive_DF[, paste("tiling_MPRAactivity", 1:9, sep = "_")], 1, sum)
+table(BET_seq_data$numActive)
+
+############################################# Boxplot
+boxplot(BET_seq_data$Cbf1_ddG ~ BET_seq_data$numActive, 
+        notch = TRUE, outline = FALSE)
+pairwise.wilcox.test(BET_seq_data$Pho4_ddG , BET_seq_data$numActive)
+
+############################################ Scatter plot
+plot(BET_seq_data$sumLog2FC, 
+     BET_seq_data$Cbf1_ddG, 
+     pch = 19, cex = 0.25,
+     xlab = "PADIT-seq log2FC (Pho4)", 
+     ylab = "ddG (CBF1)")
+
+# Correlation?
+cor.test(BET_seq_data$sumLog2FC, BET_seq_data$Cbf1_ddG)
+
+# Linear model explains 66.73% of the variance (FDR 1%)
+summary(lm(BET_seq_data$Cbf1_ddG ~ BET_seq_data$sumLog2FC))
+
+```
+
+
+# Scatter plot of CBF1 and PHO4 log2 fold change 
+```{r}
+###################################################### 
+# Read PHO4 8-mer PADIT-seq log2foldchange values for the 3 registers
+Register_1_8 <- read.table(paste(paste(Working_dir, "Output_Files/Median_kmer_log2FC", sep = "/"), "PHO4-CBF1-differential_all8mers_1_8_median.txt", sep = "/"), header = TRUE)
+Register_2_9 <- read.table(paste(paste(Working_dir, "Output_Files/Median_kmer_log2FC", sep = "/"), "PHO4-CBF1-differential_all8mers_2_9_median.txt", sep = "/"), header = TRUE)
+Register_3_10 <- read.table(paste(paste(Working_dir, "Output_Files/Median_kmer_log2FC", sep = "/"), "PHO4-CBF1-differential_all8mers_3_10_median.txt", sep = "/"), header = TRUE)
+
+# Re-define MPRAactivity
+Register_1_8$MPRAactivity <- (Register_1_8$log2FoldChange > 0 & Register_1_8$padj < Cutoff_Value)*1 + (Register_1_8$log2FoldChange < 0 & Register_1_8$padj < Cutoff_Value)*-1
+Register_2_9$MPRAactivity <- (Register_2_9$log2FoldChange > 0 & Register_2_9$padj < Cutoff_Value)*1 + (Register_2_9$log2FoldChange < 0 & Register_2_9$padj < Cutoff_Value)*-1
+Register_3_10$MPRAactivity <- (Register_3_10$log2FoldChange > 0 & Register_3_10$padj < Cutoff_Value)*1 + (Register_3_10$log2FoldChange < 0 & Register_3_10$padj < Cutoff_Value)*-1
+
+# Number of red points?
+table(Register_1_8$MPRAactivity)
+table(Register_2_9$MPRAactivity)
+table(Register_3_10$MPRAactivity)
+
+# Average of all 3 registers
+colnames(Register_1_8) <- paste(colnames(Register_1_8), "1_8", sep = "_")
+colnames(Register_2_9) <- paste(colnames(Register_2_9), "2_9", sep = "_")
+colnames(Register_3_10) <- paste(colnames(Register_3_10), "3_10", sep = "_")
+TEMP1 <- merge(Register_1_8, Register_2_9, 
+               by.x = "X8.mer_1_8", by.y = "X8.mer_2_9")
+TEMP2 <- merge(TEMP1, Register_3_10, 
+               by.x = "X8.mer_1_8", by.y = "X8.mer_3_10")
+PHO4_CBF1_Differential_PBM_Escores_PADIT <- TEMP2; rm(TEMP1); rm(TEMP2)
+
+# Define Median values
+PHO4_CBF1_Differential_PBM_Escores_PADIT$Median_baseMean <- apply(PHO4_CBF1_Differential_PBM_Escores_PADIT[,c("baseMean_1_8", "baseMean_2_9", "baseMean_3_10")], 1, median)
+PHO4_CBF1_Differential_PBM_Escores_PADIT$Mean_log2FC <- apply(PHO4_CBF1_Differential_PBM_Escores_PADIT[,c("log2FoldChange_1_8", "log2FoldChange_2_9", "log2FoldChange_3_10")], 1, median)
+PHO4_CBF1_Differential_PBM_Escores_PADIT$padj <- apply(PHO4_CBF1_Differential_PBM_Escores_PADIT[,c("padj_1_8", "padj_2_9", "padj_3_10")], 1, median)
+PHO4_CBF1_Differential_PBM_Escores_PADIT$MPRAactivity <- apply(PHO4_CBF1_Differential_PBM_Escores_PADIT[,c("MPRAactivity_1_8", "MPRAactivity_2_9", "MPRAactivity_3_10")], 1, median)
+PHO4_CBF1_Differential_PBM_Escores_PADIT <- PHO4_CBF1_Differential_PBM_Escores_PADIT[, c("X8.mer_1_8", "X8.mer.1_1_8", "Median_baseMean", "Mean_log2FC", "padj", "MPRAactivity")]
+table(PHO4_CBF1_Differential_PBM_Escores_PADIT$MPRAactivity)
+colnames(PHO4_CBF1_Differential_PBM_Escores_PADIT) <- c("X8.mer", "X8.mer.1", "Median_baseMean_differential", "Mean_log2FC_differential", "padj_differential", "MPRAactivity_differential")
+
+###################################################### Compare PHO4-CBF1
+# Merge PHO4 and CBF1 log2FC values
+PHO4_CBF1_DF <- merge(PHO4_PBM_Escores_PADIT[, c("X8.mer", "X8.mer.1", "Median_baseMean", "E.score", "Z.score", "Mean_log2FC", "padj", "MPRAactivity")], 
+                      CBF1_PBM_Escores_PADIT[, c("X8.mer",  "Median_baseMean", "E.score", "Z.score", "Mean_log2FC", "padj", "MPRAactivity")], 
+                      by = "X8.mer")
+colnames(PHO4_CBF1_DF) <- c("X8.mer", "X8.mer.1", "Median_baseMean_PHO4", "E.score_PHO4", "Z.score_PHO4", "Mean_log2FC_PHO4", "padj_PHO4", "MPRAactivity_PHO4", "Median_baseMean_CBF1", "E.score_CBF1", "Z.score_CBF1", "Mean_log2FC_CBF1", "padj_CBF1", "MPRAactivity_CBF1")
+
+# Add in the differnential values
+TEMP <- merge(PHO4_CBF1_DF, PHO4_CBF1_Differential_PBM_Escores_PADIT, by = "X8.mer")
+PHO4_CBF1_DF <- TEMP; rm(TEMP)
+
+###
+PHO4_CBF1_DF$Colour <- "#30123B"
+PHO4_CBF1_DF$Colour[which(PHO4_CBF1_DF$MPRAactivity_PHO4 == 1 & PHO4_CBF1_DF$MPRAactivity_CBF1 == 1)] <- "#FF0000"
+PHO4_CBF1_DF$Colour[which(PHO4_CBF1_DF$MPRAactivity_PHO4 == 0 & PHO4_CBF1_DF$MPRAactivity_CBF1 == 1)] <- "#00BFFF"
+PHO4_CBF1_DF$Colour[which(PHO4_CBF1_DF$MPRAactivity_PHO4 == 1 & PHO4_CBF1_DF$MPRAactivity_CBF1 == 0)] <- "#FABA39"
+plot(PHO4_CBF1_DF$Mean_log2FC_PHO4[which(PHO4_CBF1_DF$Colour == "#30123B" & PHO4_CBF1_DF$Median_baseMean_PHO4 > 10 & PHO4_CBF1_DF$Median_baseMean_CBF1 > 10)], 
+     PHO4_CBF1_DF$Mean_log2FC_CBF1[which(PHO4_CBF1_DF$Colour == "#30123B" & PHO4_CBF1_DF$Median_baseMean_PHO4 > 10 & PHO4_CBF1_DF$Median_baseMean_CBF1 > 10)],
+     col = PHO4_CBF1_DF$Colour[which(PHO4_CBF1_DF$Colour == "#30123B" & PHO4_CBF1_DF$Median_baseMean_PHO4 > 10 & PHO4_CBF1_DF$Median_baseMean_CBF1 > 10)], 
+     pch = 19, cex = 0.25, xlim = c(-0.5, 5.75), ylim = c(-0.5, 5.75), 
+     xlab = "PHO4 PADIT-seq activity", ylab = "CBF1 PADIT-seq activity")
+points(PHO4_CBF1_DF$Mean_log2FC_PHO4[which(PHO4_CBF1_DF$Colour != "#30123B" & PHO4_CBF1_DF$Median_baseMean_PHO4 > 10 & PHO4_CBF1_DF$Median_baseMean_CBF1 > 10)], 
+     PHO4_CBF1_DF$Mean_log2FC_CBF1[which(PHO4_CBF1_DF$Colour != "#30123B" & PHO4_CBF1_DF$Median_baseMean_PHO4 > 10 & PHO4_CBF1_DF$Median_baseMean_CBF1 > 10)],
+     col = PHO4_CBF1_DF$Colour[which(PHO4_CBF1_DF$Colour != "#30123B" & PHO4_CBF1_DF$Median_baseMean_PHO4 > 10 & PHO4_CBF1_DF$Median_baseMean_CBF1 > 10)], 
+     pch = 19, cex = 1.25, xlim = c(-0.5, 5.75), ylim = c(-0.5, 5.75))
+abline(a = 0, b = 1, col = "black")
+table(PHO4_CBF1_DF$Colour)
+```
+
+
+
+# Compare PHO4-CBF1 to ddG
+```{r}
+############################################ 
+head(PHO4_PBM_Escores_PADIT_df)
+head(CBF1_PBM_Escores_PADIT_df)
+
+# Read BET-seq data
+BET_seq_data <- read.csv(paste(paste(Working_dir, "Input_Files/BETseq_processed_data/Manuscript_Data", sep = "/"), "all_predicted_ddGs.csv", sep = "/"), header = TRUE)
+BET_seq_data$kmer_16 <- paste(paste(substr(BET_seq_data$flank, 1, 5), "CACGTG", sep = ""), substr(BET_seq_data$flank, 6, 10), sep = "")
+
+# Tiling
+BET_seq_data_PHO4 <- BET_seq_data
+BET_seq_data_CBF1 <- BET_seq_data
+numActive_DF_PHO4 <- BET_seq_data
+numActive_DF_CBF1 <- BET_seq_data
+for(i in 1:9)
+{
+  Current_8mers <- substr(BET_seq_data$kmer_16, i, i + 7)
+  
+  # PHO4
+  Current_8mers_DF <- PHO4_PBM_Escores_PADIT_df[match(Current_8mers, PHO4_PBM_Escores_PADIT_df$X8.mer), ]
+  BET_seq_data_PHO4[, i + 4] <- Current_8mers_DF$Mean_log2FC
+  numActive_DF_PHO4[, i + 4] <- Current_8mers_DF$MPRAactivity
+  
+  # CBF1
+  Current_8mers_DF <- CBF1_PBM_Escores_PADIT_df[match(Current_8mers, CBF1_PBM_Escores_PADIT_df$X8.mer), ]
+  BET_seq_data_CBF1[, i + 4] <- Current_8mers_DF$Mean_log2FC
+  numActive_DF_CBF1[, i + 4] <- Current_8mers_DF$MPRAactivity
+}
+colnames(BET_seq_data_PHO4) <- c("flank",  "Cbf1_ddG",  "Pho4_ddG", "kmer_16", paste("tiling_log2FC", 1:9, sep = "_"))
+colnames(BET_seq_data_CBF1) <- c("flank",  "Cbf1_ddG",  "Pho4_ddG", "kmer_16", paste("tiling_log2FC", 1:9, sep = "_"))
+colnames(numActive_DF_PHO4) <- c("flank",  "Cbf1_ddG",  "Pho4_ddG", "kmer_16", paste("tiling_MPRAactivity", 1:9, sep = "_"))
+colnames(numActive_DF_CBF1) <- c("flank",  "Cbf1_ddG",  "Pho4_ddG", "kmer_16", paste("tiling_MPRAactivity", 1:9, sep = "_"))
+
+# 
+BET_seq_data$maxLog2FC_PHO4 <- apply(BET_seq_data_PHO4[, paste("tiling_log2FC", 1:9, sep = "_")], 1, max)
+BET_seq_data$maxLog2FC_CBF1 <- apply(BET_seq_data_CBF1[, paste("tiling_log2FC", 1:9, sep = "_")], 1, max)
+BET_seq_data$Log2FC_5_PHO4 <- BET_seq_data_PHO4$tiling_log2FC_5
+BET_seq_data$Log2FC_5_CBF1 <- BET_seq_data_CBF1$tiling_log2FC_5
+BET_seq_data$sumLog2FC_PHO4 <- apply(BET_seq_data_PHO4[, paste("tiling_log2FC", 1:9, sep = "_")], 1, sum)
+BET_seq_data$sumLog2FC_CBF1 <- apply(BET_seq_data_CBF1[, paste("tiling_log2FC", 1:9, sep = "_")], 1, sum)
+BET_seq_data$numActive_PHO4 <- apply(numActive_DF_PHO4[, paste("tiling_MPRAactivity", 1:9, sep = "_")], 1, sum)
+BET_seq_data$numActive_CBF1 <- apply(numActive_DF_CBF1[, paste("tiling_MPRAactivity", 1:9, sep = "_")], 1, sum)
+
+# 
+table(BET_seq_data$numActive_PHO4)
+table(BET_seq_data$numActive_CBF1)
+table(BET_seq_data$numActive_PHO4, 
+      BET_seq_data$numActive_CBF1)
+
+############################################ Difference in log2fc at 5th register explains 69.58% of the variance
+summary(lm((BET_seq_data$Cbf1_ddG - BET_seq_data$Pho4_ddG) ~ (BET_seq_data$Log2FC_5_CBF1 - BET_seq_data$Log2FC_5_PHO4) ))
+
+############################################ 
+# define variables of interest
+BET_seq_data$dddG <- BET_seq_data$Cbf1_ddG - BET_seq_data$Pho4_ddG
+BET_seq_data$Diff_numActive <- BET_seq_data$numActive_PHO4 - BET_seq_data$numActive_CBF1
+BET_seq_data$Diff_numActive[which(BET_seq_data$Diff_numActive > 5)] <- 5
+table(BET_seq_data$Diff_numActive)
+
+# histogram
+hist(BET_seq_data$dddG, breaks = 1000)
+
+# Boxplot
+boxplot(BET_seq_data$dddG ~ BET_seq_data$Diff_numActive, 
+        notch = TRUE, outline = FALSE,
+        ylab = "ddG (Cbf1 - Pho4)")
+pairwise.wilcox.test(BET_seq_data$dddG, BET_seq_data$Diff_numActive)
+
+# Linear model explains 63.1% of the variance
+summary(lm((BET_seq_data$Cbf1_ddG - BET_seq_data$Pho4_ddG) ~ BET_seq_data$Diff_numActive))
+
+############################################ 
+# 
+BET_seq_data$Diff_sumLog2FC <- BET_seq_data$sumLog2FC_PHO4 - BET_seq_data$sumLog2FC_CBF1
+
+# Scatter plot
+kmers_of_interest <- c("TACGTCACGTGCCCTG", "GCACGCACGTGAGTCT")
+plot(BET_seq_data$Diff_sumLog2FC, 
+     BET_seq_data$dddG, 
+     pch = 19, cex = 0.25,
+     xlab = "PADIT-seq log2FC (Pho4 - Cbf1)", 
+     ylab = "ddG (Cbf1 - Pho4)")
+points(BET_seq_data$Diff_sumLog2FC[which(BET_seq_data$kmer_16 %in% kmers_of_interest)], 
+       BET_seq_data$dddG[which(BET_seq_data$kmer_16 %in% kmers_of_interest)], 
+       col = "#6CBE45", pch = 19, cex = 1)
+
+# Linear model explains 89.35% of the variance (FDR 5%); 89.77% of the variance (FDR 1%)
+summary(lm(BET_seq_data$dddG ~ BET_seq_data$Diff_sumLog2FC))
+
+############################################ Make plot without labels
+plot(BET_seq_data$Diff_sumLog2FC, 
+     BET_seq_data$dddG, 
+     pch = 19, cex = 0.25,
+     xlab = "", 
+     ylab = "", 
+     axes = FALSE)
+# Add axes with ticks but no labels
+axis(1, labels = FALSE)  # x-axis
+axis(2, labels = FALSE)  # y-axis
+# Add box around the plot
+box()
+# Add points
+points(BET_seq_data$Diff_sumLog2FC[which(BET_seq_data$kmer_16 %in% kmers_of_interest)], 
+       BET_seq_data$dddG[which(BET_seq_data$kmer_16 %in% kmers_of_interest)], 
+       col = "#6CBE45", pch = 19, cex = 1)
+
+```
+
+
+
+```{r}
+############################################ Plot specific examples (PHO4 > CBF1)
+# Loop 
+BET_seq_data <- BET_seq_data[order(abs(abs(BET_seq_data$Diff_sumLog2FC)), decreasing = FALSE), ]
+Choose_16mer <- BET_seq_data$kmer_16[which(BET_seq_data$Diff_numActive == 4 & BET_seq_data$dddG > 0)]
+for(i in 1:length(Choose_16mer[1:2]))
+{
+  # CBF1 
+  numActive_DF_CBF1_vec <- numActive_DF_CBF1[which(numActive_DF_CBF1$kmer_16 == Choose_16mer[i]), paste("tiling_MPRAactivity", 1:9, sep = "_")]
+  col_vec <- rep("black", times = 19)
+  col_vec[which(numActive_DF_CBF1_vec == 1)] <- "blue"
+  plot(1:9, BET_seq_data_CBF1[which(BET_seq_data_CBF1$kmer_16 == Choose_16mer[i]), paste("tiling_log2FC", 1:9, sep = "_")], 
+     pch = 19, type = "b", col = col_vec, 
+     ylim = c(0, 5.5), cex = 4,
+     main = Choose_16mer[i], 
+     xlab = "Consecutive overlapping 8-mers", 
+     ylab = "PBM e-scores")
+  
+  # PHO4 
+  numActive_DF_PHO4_vec <- numActive_DF_PHO4[which(numActive_DF_PHO4$kmer_16 == Choose_16mer[i]), paste("tiling_MPRAactivity", 1:9, sep = "_")]
+  col_vec <- rep("black", times = 19)
+  col_vec[which(numActive_DF_PHO4_vec == 1)] <- "red"
+  points(1:9, BET_seq_data_PHO4[which(BET_seq_data_PHO4$kmer_16 == Choose_16mer[i]), paste("tiling_log2FC", 1:9, sep = "_")], 
+         cex = 4, pch = 19, type = "b", col = col_vec)
+}
+
+############################################ Plot specific examples (PHO4 < CBF1)
+# Loop 
+Choose_16mer <- BET_seq_data$kmer_16[which(BET_seq_data$Diff_numActive == -2 & BET_seq_data$dddG < 0)]
+for(i in 1:length(Choose_16mer[1:2]))
+{
+  # CBF1 
+  numActive_DF_CBF1_vec <- numActive_DF_CBF1[which(numActive_DF_CBF1$kmer_16 == Choose_16mer[i]), paste("tiling_MPRAactivity", 1:9, sep = "_")]
+  col_vec <- rep("black", times = 19)
+  col_vec[which(numActive_DF_CBF1_vec == 1)] <- "blue"
+  plot(1:9, BET_seq_data_CBF1[which(BET_seq_data_CBF1$kmer_16 == Choose_16mer[i]), paste("tiling_log2FC", 1:9, sep = "_")], 
+     pch = 19, type = "b", col = col_vec, 
+     ylim = c(0, 5.5), cex = 4,
+     main = Choose_16mer[i], 
+     xlab = "Consecutive overlapping 8-mers", 
+     ylab = "PBM e-scores")
+  
+  # PHO4 
+  numActive_DF_PHO4_vec <- numActive_DF_PHO4[which(numActive_DF_PHO4$kmer_16 == Choose_16mer[i]), paste("tiling_MPRAactivity", 1:9, sep = "_")]
+  col_vec <- rep("black", times = 19)
+  col_vec[which(numActive_DF_PHO4_vec == 1)] <- "red"
+  points(1:9, BET_seq_data_PHO4[which(BET_seq_data_PHO4$kmer_16 == Choose_16mer[i]), paste("tiling_log2FC", 1:9, sep = "_")], 
+         cex = 4, pch = 19, type = "b", col = col_vec)
+}
+
+```
+
+
+
+# Compare to competitive PBM data
+```{r}
+library(readxl)
+############################################
+# Read competitive PBM data
+gcPBM_data <- as.data.frame(read_excel(paste(paste(Working_dir, "Input_Files/Pho4_Cbf1_competitivePBM_data", sep = "/"), "supp_gr.275145.120_Supplemental_Table_S2.xlsx", sep = "/"), sheet = "C. Full data for Fig2B"))[, c(1, 2)]
+gcPBM_data_PHO4_resilience <- as.data.frame(read_excel(paste(paste(Working_dir, "Input_Files/Pho4_Cbf1_competitivePBM_data", sep = "/"), "supp_gr.275145.120_Supplemental_Table_S3.xlsx", sep = "/"), sheet = "A. Full data for Fig3 C, D"))
+gcPBM_data_CBF1_resilience <- as.data.frame(read_excel(paste(paste(Working_dir, "Input_Files/Pho4_Cbf1_competitivePBM_data", sep = "/"), "supp_gr.275145.120_Supplemental_Table_S3.xlsx", sep = "/"), sheet = "B. Full data for Fig3 G, H"))
+
+# Format and merge
+colnames(gcPBM_data_PHO4_resilience) <- c("Probe_Name", "In_Vitro_Resilience_PHO4", "In_Vivo_Resilience_PHO4")
+colnames(gcPBM_data_CBF1_resilience) <- c("Probe_Name", "In_Vitro_Resilience_CBF1", "In_Vivo_Resilience_CBF1")
+TEMP1 <- merge(gcPBM_data_PHO4_resilience, gcPBM_data_CBF1_resilience, by = "Probe_Name")
+TEMP2 <- merge(gcPBM_data, TEMP1, by = "Probe_Name")
+gcPBM_data_resilience <- TEMP2; rm(TEMP1); rm(TEMP2)
+
+# 
+PHO4_PBM_Escores_PADIT_df <- unique(PHO4_PBM_Escores_PADIT_df)
+CBF1_PBM_Escores_PADIT_df <- unique(CBF1_PBM_Escores_PADIT_df)
+
+# Tile PBM E-scores (PHO4)
+PHO4_TILING_DF <- data.frame()
+for(i in 1:nrow(gcPBM_data_resilience))
+{
+  Current_Probe_Sequence <- gcPBM_data_resilience$Probe_Sequence[i]
+  Tiling_df <- data.frame()
+  for(j in 1:(nchar(Current_Probe_Sequence) - 7))
+  {
+    Current_kmer_8 <- substr(Current_Probe_Sequence, j, j+7)
+    PHO4_TILING_DF[i, j] <- 0
+    if(PHO4_PBM_Escores_PADIT_df$MPRAactivity[which(PHO4_PBM_Escores_PADIT_df$X8.mer %in% Current_kmer_8)] == 1)
+    {
+      PHO4_TILING_DF[i, j] <- PHO4_PBM_Escores_PADIT_df$Mean_log2FC[which(PHO4_PBM_Escores_PADIT_df$X8.mer %in% Current_kmer_8)]
+    }
+  }
+}
+colnames(PHO4_TILING_DF) <- c(paste("tiling_8mer_PHO4", 1:(nchar(Current_Probe_Sequence) - 7), sep = "_"))
+
+# Tile PBM E-scores (Cbf1)
+Cbf1_TILING_DF <- data.frame()
+for(i in 1:nrow(gcPBM_data_resilience))
+{
+  Current_Probe_Sequence <- gcPBM_data_resilience$Probe_Sequence[i]
+  Tiling_df <- data.frame()
+  for(j in 1:(nchar(Current_Probe_Sequence) - 7))
+  {
+    Current_kmer_8 <- substr(Current_Probe_Sequence, j, j+7)
+    Cbf1_TILING_DF[i, j] <- 0
+    if(CBF1_PBM_Escores_PADIT_df$MPRAactivity[which(CBF1_PBM_Escores_PADIT_df$X8.mer %in% Current_kmer_8)] == 1)
+    {
+      Cbf1_TILING_DF[i, j] <- CBF1_PBM_Escores_PADIT_df$Mean_log2FC[which(CBF1_PBM_Escores_PADIT_df$X8.mer %in% Current_kmer_8)]
+    }
+  }
+}
+colnames(Cbf1_TILING_DF) <- c(paste("tiling_8mer_Cbf1", 1:(nchar(Current_Probe_Sequence) - 7), sep = "_"))
+
+############################################ Create Data frame with the right information
+gcPBM_data_resilience$sum_escores_PHO4 <- rowSums(PHO4_TILING_DF[, paste("tiling_8mer_PHO4", 1:(nchar(Current_Probe_Sequence) - 7), sep = "_")])
+gcPBM_data_resilience$numActive_PHO4 <- rowSums(cbind(PHO4_TILING_DF[, paste("tiling_8mer_PHO4", 1:(nchar(Current_Probe_Sequence) - 7), sep = "_")] > 0)*1)
+gcPBM_data_resilience$sum_escores_Cbf1 <- rowSums(Cbf1_TILING_DF[, paste("tiling_8mer_Cbf1", 1:(nchar(Current_Probe_Sequence) - 7), sep = "_")])
+gcPBM_data_resilience$numActive_Cbf1 <- rowSums(cbind(Cbf1_TILING_DF[, paste("tiling_8mer_Cbf1", 1:(nchar(Current_Probe_Sequence) - 7), sep = "_")] > 0)*1)
+
+# Define Diff_numActive
+gcPBM_data_resilience$Diff_numActive <- gcPBM_data_resilience$numActive_PHO4 - gcPBM_data_resilience$numActive_Cbf1
+table(gcPBM_data_resilience$Diff_numActive)
+
+############################################ Create Data frame with the right information (making sure that the binding sites are consecutive)
+gcPBM_data_resilience$sum_escores_PHO4 <- rowSums(PHO4_TILING_DF[, paste("tiling_8mer_PHO4", 1:(nchar(Current_Probe_Sequence) - 7), sep = "_")])
+gcPBM_data_resilience$sum_escores_Cbf1 <- rowSums(Cbf1_TILING_DF[, paste("tiling_8mer_Cbf1", 1:(nchar(Current_Probe_Sequence) - 7), sep = "_")])
+gcPBM_data_resilience$numActive_PHO4 <- sapply(1:nrow(PHO4_TILING_DF), function(i) {
+  # Get row of values
+  row_values <- as.numeric(PHO4_TILING_DF[i, ])
+  # Create vector of 1s and 0s where values > 0
+  binary_vec <- as.numeric(row_values > 0)
+  # Find runs of consecutive 1s
+  # Split vector at 0s
+  runs <- rle(binary_vec)
+  # Find longest streak of 1s
+  max_consecutive <- ifelse(any(runs$values == 1), 
+                          max(runs$lengths[runs$values == 1]),
+                          0)
+  return(max_consecutive)
+})
+gcPBM_data_resilience$numActive_Cbf1 <- sapply(1:nrow(Cbf1_TILING_DF), function(i) {
+  # Get row of values
+  row_values <- as.numeric(Cbf1_TILING_DF[i, ])
+  # Create vector of 1s and 0s where values > 0
+  binary_vec <- as.numeric(row_values > 0)
+  # Find runs of consecutive 1s
+  # Split vector at 0s
+  runs <- rle(binary_vec)
+  # Find longest streak of 1s
+  max_consecutive <- ifelse(any(runs$values == 1), 
+                          max(runs$lengths[runs$values == 1]),
+                          0)
+  return(max_consecutive)
+})
+
+# Define Diff_numActive
+gcPBM_data_resilience$Diff_numActive <- gcPBM_data_resilience$numActive_PHO4 - gcPBM_data_resilience$numActive_Cbf1
+table(gcPBM_data_resilience$Diff_numActive)
+
+############################################ Boxplots (in vitro resilience)
+# boxplot (Cbf1)
+boxplot(gcPBM_data_resilience$In_Vitro_Resilience_CBF1 ~ gcPBM_data_resilience$Diff_numActive, 
+        notch = TRUE, outline = FALSE, col = "blue",
+        xlab = "Differential number of binding sites (Pho4 - Cbf1)", 
+        ylab = "In Vitro Resilience of Cbf1 binding in the presence of Pho4")
+# 
+pairwise.wilcox.test(gcPBM_data_resilience$In_Vitro_Resilience_CBF1, 
+                     gcPBM_data_resilience$Diff_numActive)
+
+# boxplot (PHO4)
+boxplot(gcPBM_data_resilience$In_Vitro_Resilience_PHO4 ~ gcPBM_data_resilience$Diff_numActive, 
+        notch = TRUE, outline = FALSE, col = "red", # add = TRUE, 
+        xlab = "Differential number of binding sites (Pho4 - Cbf1)", 
+        ylab = "In Vitro Resilience of Pho4 binding in the presence of Cbf1")
+# 
+pairwise.wilcox.test(gcPBM_data_resilience$In_Vitro_Resilience_PHO4, 
+                     gcPBM_data_resilience$Diff_numActive)
+
+############################################ Boxplots (in vivo resilience)
+# boxplot (Cbf1)
+boxplot(gcPBM_data_resilience$In_Vivo_Resilience_CBF1 ~ gcPBM_data_resilience$Diff_numActive, 
+        notch = TRUE, outline = FALSE, col = "green",
+        xlab = "Differential number of binding sites (Pho4 - Cbf1)", 
+        ylab = "In vivo Resilience of Cbf1 binding in the presence of Pho4")
+# 
+pairwise.wilcox.test(gcPBM_data_resilience$In_Vivo_Resilience_CBF1, 
+                     gcPBM_data_resilience$Diff_numActive)
+
+############ boxplot (PHO4)
+# gcPBM_data_resilience$Diff_numActive[which(gcPBM_data_resilience$Diff_numActive < 0)] <- 0
+table(gcPBM_data_resilience$Diff_numActive)
+boxplot(gcPBM_data_resilience$In_Vivo_Resilience_PHO4 ~ gcPBM_data_resilience$Diff_numActive, 
+        notch = TRUE, outline = FALSE, col = "green", # add = TRUE, 
+        xlab = "Differential number of binding sites (Pho4 - Cbf1)", 
+        ylab = "In vivo Resilience of Pho4 binding in the presence of Cbf1")
+# 
+pairwise.wilcox.test(gcPBM_data_resilience$In_Vivo_Resilience_PHO4, 
+                     gcPBM_data_resilience$Diff_numActive)
+
+```
+
+
+
+
+
+```{r}
+gcPBM_data_resilience <- gcPBM_data_resilience[order(gcPBM_data_resilience$In_Vivo_Resilience_PHO4, decreasing = TRUE), ]
+
+for(i in 1:100)
+{
+  Current_Probe_Sequence <- gcPBM_data_resilience$Probe_Sequence[i]
+  PHO4_TILING_DF <- vector()
+  PHO4_active_DF <- vector()
+  CBF1_TILING_DF <- vector()
+  CBF1_active_DF <- vector()
+  for(j in 1:(nchar(Current_Probe_Sequence) - 7))
+  {
+    Current_kmer_8 <- substr(Current_Probe_Sequence, j, j+7)
+    # CBF1
+    CBF1_TILING_DF[j] <- CBF1_PBM_Escores_PADIT_df$Mean_log2FC[which(CBF1_PBM_Escores_PADIT_df$X8.mer %in% Current_kmer_8)]
+    CBF1_active_DF[j] <- CBF1_PBM_Escores_PADIT_df$MPRAactivity[which(CBF1_PBM_Escores_PADIT_df$X8.mer %in% Current_kmer_8)]
+    
+    # PHO4
+    PHO4_TILING_DF[j] <- PHO4_PBM_Escores_PADIT_df$Mean_log2FC[which(PHO4_PBM_Escores_PADIT_df$X8.mer %in% Current_kmer_8)]
+    PHO4_active_DF[j] <- PHO4_PBM_Escores_PADIT_df$MPRAactivity[which(PHO4_PBM_Escores_PADIT_df$X8.mer %in% Current_kmer_8)]
+  }
+  
+  # plot CBF1
+    col_vec <- rep("black", times = length(CBF1_TILING_DF))
+    col_vec[which(CBF1_active_DF == 1)] <- "blue"
+    plot(1:length(CBF1_TILING_DF), CBF1_TILING_DF, 
+     pch = 19, type = "b", col = col_vec, 
+     ylim = c(-1, 6.5),
+     main = i, 
+     xlab = "Consecutive overlapping 8-mers", 
+     ylab = "PADIT-seq log2FC")
+    
+    # plot PHO4
+    col_vec <- rep("black", times = length(PHO4_TILING_DF))
+    col_vec[which(PHO4_active_DF == 1)] <- "red"
+    points(1:length(PHO4_TILING_DF), PHO4_TILING_DF, 
+           pch = 19, type = "b", col = col_vec)
+}
+
+```
+

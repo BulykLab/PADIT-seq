@@ -1,0 +1,632 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+
+# Set Global Variables here
+
+```{r}
+# Please change the working directory
+Working_dir <- "~/Desktop/AVATAR/PADIT-seq-Manuscript/Code_Availability_Revision/"
+
+# Please be sure to install these libraries
+library(pheatmap); library(ggplot2); library(DESeq2); library(ggrepel); library("stringr")
+
+# FDR cutoff (do not change)
+Cutoff_Value <- 0.05
+```
+
+
+# Custom functions
+```{r}
+library(seqLogo)
+
+# Function to generate PWM logo for any specified k-mers
+Generate_PWM_seqlogo <- function(kmers_vec, kmer_length = 8)
+{
+  # Generate data frame for seqlogo
+  kmers_vec_df <- data.frame()
+  for(i in 1:kmer_length)
+  {
+    letter_i <- substr(kmers_vec, i, i)
+    count <- 0
+    for(j in c("A", "C", "G", "T"))
+    {
+      count <- count + 1
+      kmers_vec_df[i, count] <- sum(letter_i == j)
+    }
+  }
+  colnames(kmers_vec_df) <- c("A", "C", "G", "T")
+  
+  #define function that divides the frequency by the row sum i.e. proportions
+  proportion <- function(x){
+     rs <- sum(x);
+     return(x / rs);
+  }
+   
+  #create position weight matrix
+  HOXD13_seqlogo <- apply(kmers_vec_df, 1, proportion)
+  HOXD13_seqlogo <- makePWM(HOXD13_seqlogo)
+  seqLogo(HOXD13_seqlogo)
+}
+
+```
+
+
+
+# Obtain HOXD13 8-mer PADIT-seq log2foldchange values from 10-mer data
+# Caution: This is going to take a while (approximately 3 hours)
+
+```{r}
+# # Read HOXD13 PADIT-seq data
+# dds_results_HOXD13_df <- read.table(paste(paste(Working_dir, "Output_Files", sep = "/"), "dds_results_HOXD13_df.txt", sep = "/"), header = TRUE)
+# dds_results_HOXD13_df <- dds_results_HOXD13_df[complete.cases(dds_results_HOXD13_df), ]
+# dds_results_HOXD13_df$TFBS <- rownames(dds_results_HOXD13_df)
+# 
+# # Read HOXD13 PBM data
+# HOXD13_PBM_Escores <- read.table(paste(paste(Working_dir, "Input_Files/PBM_data_HOXD13", sep = "/"), "HOXD13_REF_R2_8mers_11111111.txt", sep = "/"), header = TRUE)
+# 
+# # 
+# for(k in 0:2) # The 3 8-mers overlapping each 10-mer
+# {
+#   HOXD13_PBM_Escores_PADIT <- data.frame()
+#   for(i in 1:nrow(HOXD13_PBM_Escores)) # For each register, calculate the median 8-mer scores
+#   {
+#     Current_8mers <- HOXD13_PBM_Escores[i,] 
+#     
+#     # Forward orientation
+#     Fwd <- dds_results_HOXD13_df[which(substr(dds_results_HOXD13_df$TFBS, k+1, k+8) == Current_8mers$X8.mer[1]),]
+#     Fwd.tmp <- Fwd[order(Fwd$log2FoldChange, decreasing = TRUE),]
+#     Fwd <- Fwd.tmp; rm(Fwd.tmp)
+#     if(nrow(Fwd) > 0)
+#     {
+#       Fwd_subset <- Fwd[ceiling(nrow(Fwd)/2), c("log2FoldChange", "padj", "MPRAactivity")] # Obtain median
+#     }
+#     else
+#     {
+#       Fwd_subset <- as.data.frame(t(c(-100, 1, 0))) 
+#       colnames(Fwd_subset) <- c("log2FoldChange", "padj", "MPRAactivity")
+#     }
+#     
+#     # Reverse complement
+#     Rev <- dds_results_HOXD13_df[which(substr(dds_results_HOXD13_df$TFBS, k+1, k+8) == Current_8mers$X8.mer.1[1]),]
+#     Rev.tmp <- Rev[order(Rev$log2FoldChange, decreasing = TRUE),]
+#     Rev <- Rev.tmp; rm(Rev.tmp)
+#     if(nrow(Rev) > 0)
+#     {
+#       Rev_subset <- Rev[ceiling(nrow(Rev)/2), c("log2FoldChange", "padj", "MPRAactivity")] # Obtain median
+#     }
+#     else
+#     {
+#       Rev_subset <- as.data.frame(t(c(-100, 1, 0)))
+#       colnames(Rev_subset) <- c("log2FoldChange", "padj", "MPRAactivity")
+#     }
+#     
+#     # Keep orientation with the higher value
+#     if((Fwd_subset$log2FoldChange >= Rev_subset$log2FoldChange) | (nrow(Rev_subset) == 0))
+#     {
+#       Current_8mers <- cbind(Current_8mers, Fwd_subset)
+#     }
+#     if((Fwd_subset$log2FoldChange < Rev_subset$log2FoldChange) | (nrow(Fwd_subset) == 0))
+#     {
+#       Current_8mers <- cbind(Current_8mers, Rev_subset)
+#     }
+#     
+#     # Add to the growing DF
+#     HOXD13_PBM_Escores_PADIT <- rbind(HOXD13_PBM_Escores_PADIT, Current_8mers)
+#   
+#     # remove all the variable in current iteration
+#     variables_to_remove = c("Current_8mers", "Fwd", "Fwd_subset", "Rev", "Rev_subset")
+#     for (var_name in variables_to_remove)
+#     {
+#       if (exists(var_name))
+#       {
+#         rm(list=var_name)
+#       }
+#     }
+#   }
+#   
+#   # Store the files
+#   if(k == 0){ write.table(HOXD13_PBM_Escores_PADIT, file = paste(paste(Working_dir, "Output_Files", sep = "/"), "HOXD13_all8mers_1_8_median.txt", sep = "/"), col.names = TRUE, row.names = FALSE, quote = FALSE, sep = "\t") }
+#   if(k == 1){ write.table(HOXD13_PBM_Escores_PADIT, file = paste(paste(Working_dir, "Output_Files", sep = "/"), "HOXD13_all8mers_2_9_median.txt", sep = "/"), col.names = TRUE, row.names = FALSE, quote = FALSE, sep = "\t") }
+#   if(k == 2){ write.table(HOXD13_PBM_Escores_PADIT, file = paste(paste(Working_dir, "Output_Files", sep = "/"), "HOXD13_all8mers_3_10_median.txt", sep = "/"), col.names = TRUE, row.names = FALSE, quote = FALSE, sep = "\t") }
+# }
+
+```
+
+
+# Plot comparison to PBM E-scores
+```{r}
+# Read HOXD13 PBM data
+HOXD13_PBM_Escores <- read.table(paste(paste(Working_dir, "Input_Files/PBM_data_HOXD13", sep = "/"), "HOXD13_REF_R2_8mers_11111111.txt", sep = "/"), header = TRUE)
+
+################################################################# Read HOXD13 8-mer PADIT-seq log2foldchange values for the 3 registers
+Register_1_8 <- read.table(paste(paste(Working_dir, "Output_Files", sep = "/"), "HOXD13_all8mers_1_8_median.txt", sep = "/"), header = TRUE)
+Register_2_9 <- read.table(paste(paste(Working_dir, "Output_Files", sep = "/"), "HOXD13_all8mers_2_9_median.txt", sep = "/"), header = TRUE)
+Register_3_10 <- read.table(paste(paste(Working_dir, "Output_Files", sep = "/"), "HOXD13_all8mers_3_10_median.txt", sep = "/"), header = TRUE)
+
+# Re-define MPRAactivity
+Register_1_8$MPRAactivity <- (Register_1_8$log2FoldChange > 0 & Register_1_8$padj < Cutoff_Value)*1
+Register_2_9$MPRAactivity <- (Register_2_9$log2FoldChange > 0 & Register_2_9$padj < Cutoff_Value)*1
+Register_3_10$MPRAactivity <- (Register_3_10$log2FoldChange > 0 & Register_3_10$padj < Cutoff_Value)*1
+
+# Number of red points?
+table(Register_1_8$MPRAactivity)
+table(Register_2_9$MPRAactivity)
+table(Register_3_10$MPRAactivity)
+
+# Fraction of red points?
+sum((Register_1_8$MPRAactivity == 1)*1)/nrow(Register_1_8)
+sum((Register_2_9$MPRAactivity == 1)*1)/nrow(Register_2_9)
+sum((Register_3_10$MPRAactivity == 1)*1)/nrow(Register_3_10)
+
+################################################################# Average of all 3 registers
+# Format
+colnames(Register_1_8) <- paste(colnames(Register_1_8), "1_8", sep = "_")
+colnames(Register_2_9) <- paste(colnames(Register_2_9), "2_9", sep = "_")
+colnames(Register_3_10) <- paste(colnames(Register_3_10), "3_10", sep = "_")
+TEMP1 <- merge(Register_1_8, Register_2_9, 
+               by.x = "X8.mer_1_8", by.y = "X8.mer_2_9")
+TEMP2 <- merge(TEMP1, Register_3_10, 
+               by.x = "X8.mer_1_8", by.y = "X8.mer_3_10")
+HOXD13_PBM_Escores_PADIT <- TEMP2; rm(TEMP1); rm(TEMP2)
+HOXD13_PBM_Escores_PADIT$Mean_log2FC <- apply(HOXD13_PBM_Escores_PADIT[,c("log2FoldChange_1_8", "log2FoldChange_2_9", "log2FoldChange_3_10")], 1, median)
+HOXD13_PBM_Escores_PADIT$padj <- apply(HOXD13_PBM_Escores_PADIT[,c("padj_1_8", "padj_2_9", "padj_3_10")], 1, median)
+HOXD13_PBM_Escores_PADIT$MPRAactivity <- apply(HOXD13_PBM_Escores_PADIT[,c("MPRAactivity_1_8", "MPRAactivity_2_9", "MPRAactivity_3_10")], 1, median)
+
+# Plot (against e-scores)
+HOXD13_PBM_Escores_PADIT$Colour <- "black"
+HOXD13_PBM_Escores_PADIT$Colour[which(HOXD13_PBM_Escores_PADIT$MPRAactivity == 1)] <- "red"
+HOXD13_PBM_Escores_PADIT_subset <- HOXD13_PBM_Escores_PADIT 
+plot(HOXD13_PBM_Escores_PADIT_subset$E.score_1_8[which(HOXD13_PBM_Escores_PADIT$Colour == "black")], 
+     HOXD13_PBM_Escores_PADIT_subset$Mean_log2FC[which(HOXD13_PBM_Escores_PADIT$Colour == "black")], 
+     cex = 0.5, pch = 19, cex.axis = 2, cex.lab = 2,
+     col = "black", 
+     xlim = c(-0.45, 0.5), ylim = c(-0.3, 2.8), 
+     xlab = "E-score", ylab = "PADIT-seq log2 (ALFA-HOXD13 / No-DBD)")
+points(HOXD13_PBM_Escores_PADIT_subset$E.score_1_8[which(HOXD13_PBM_Escores_PADIT$Colour == "red")], 
+       HOXD13_PBM_Escores_PADIT_subset$Mean_log2FC[which(HOXD13_PBM_Escores_PADIT$Colour == "red")],
+       cex = 0.5, pch = 19, col = "red")
+abline(h = 0, col = "red")
+abline(v = 0.30, col = "red")
+table(HOXD13_PBM_Escores_PADIT$Colour)
+cor.test(HOXD13_PBM_Escores_PADIT_subset$E.score_1_8, HOXD13_PBM_Escores_PADIT_subset$Mean_log2FC)
+
+# Plot (against z-scores)
+HOXD13_PBM_Escores_PADIT_subset <- HOXD13_PBM_Escores_PADIT 
+plot(HOXD13_PBM_Escores_PADIT_subset$Z.score_1_8[which(HOXD13_PBM_Escores_PADIT$Colour == "black")], 
+     HOXD13_PBM_Escores_PADIT_subset$Mean_log2FC[which(HOXD13_PBM_Escores_PADIT$Colour == "black")], 
+     cex = 0.5, pch = 19, cex.axis = 2, cex.lab = 2,
+     col = "black", 
+     xlim = c(-2.5, 12.5), ylim = c(-0.3, 2.8), 
+     xlab = "Z-score", ylab = "PADIT-seq log2 (ALFA-HOXD13 / No-DBD)")
+points(HOXD13_PBM_Escores_PADIT_subset$Z.score_1_8[which(HOXD13_PBM_Escores_PADIT$Colour == "red")], 
+       HOXD13_PBM_Escores_PADIT_subset$Mean_log2FC[which(HOXD13_PBM_Escores_PADIT$Colour == "red")],
+       cex = 0.5, pch = 19, col = "red")
+abline(h = 0, col = "red")
+cor.test(HOXD13_PBM_Escores_PADIT_subset$Z.score_1_8, HOXD13_PBM_Escores_PADIT_subset$Mean_log2FC)
+
+```
+
+
+# Make PWMs if needed
+```{r}
+######################################################### Select which orientation
+# Read HOXD13 10-mer PADIT-seq data
+dds_results_HOXD13_df <- read.table(paste(paste(Working_dir, "Output_Files", sep = "/"), "dds_results_HOXD13_df.txt", sep = "/"), header = TRUE)
+dds_results_HOXD13_df <- dds_results_HOXD13_df[complete.cases(dds_results_HOXD13_df), ]
+dds_results_HOXD13_df$TFBS <- rownames(dds_results_HOXD13_df)
+dds_results_HOXD13_df_sorted <- dds_results_HOXD13_df[order(dds_results_HOXD13_df$log2FoldChange, decreasing = TRUE),]
+dds_results_HOXD13_df_sorted <- dds_results_HOXD13_df_sorted[which(dds_results_HOXD13_df_sorted$MPRAactivity == 1),]
+dds_results_HOXD13_df_sorted$TFBS_1_8 <- substr(dds_results_HOXD13_df_sorted$TFBS, 1, 8)
+dds_results_HOXD13_df_sorted$TFBS_2_9 <- substr(dds_results_HOXD13_df_sorted$TFBS, 2, 9)
+dds_results_HOXD13_df_sorted$TFBS_3_10 <- substr(dds_results_HOXD13_df_sorted$TFBS, 3, 10)
+all_8mers_in_active_10mers <- c(dds_results_HOXD13_df_sorted$TFBS_1_8, dds_results_HOXD13_df_sorted$TFBS_2_9, dds_results_HOXD13_df_sorted$TFBS_3_10)
+
+# Sort, filte and format 8-mers
+HOXD13_PBM_Escores_PADIT_sorted <- HOXD13_PBM_Escores_PADIT[order(HOXD13_PBM_Escores_PADIT$Mean_log2FC, decreasing = TRUE),]
+HOXD13_PBM_Escores_PADIT_sorted <- HOXD13_PBM_Escores_PADIT_sorted[which(HOXD13_PBM_Escores_PADIT_sorted$MPRAactivity == 1),]
+for(i in 1:nrow(HOXD13_PBM_Escores_PADIT_sorted))
+{
+  num_fwd <- sum(all_8mers_in_active_10mers %in% HOXD13_PBM_Escores_PADIT_sorted$X8.mer_1_8[i])
+  num_rev <- sum(all_8mers_in_active_10mers %in% HOXD13_PBM_Escores_PADIT_sorted$X8.mer.1_1_8[i])
+  if(num_fwd >= num_rev)
+  {
+    HOXD13_PBM_Escores_PADIT_sorted$Display_8mer[i] <- HOXD13_PBM_Escores_PADIT_sorted$X8.mer.1_1_8[i]
+  }
+  if(num_fwd < num_rev)
+  {
+    HOXD13_PBM_Escores_PADIT_sorted$Display_8mer[i] <- HOXD13_PBM_Escores_PADIT_sorted$X8.mer_1_8[i]
+  }
+}
+
+################### Generate PWMs
+Generate_PWM_seqlogo(HOXD13_PBM_Escores_PADIT_sorted$Display_8mer[1:15])
+for(i in 0:2)
+{
+  Generate_PWM_seqlogo(HOXD13_PBM_Escores_PADIT_sorted$Display_8mer[((i*500)+1):((i+1)*500)])
+}
+
+```
+
+
+
+################################################## Add HT-SELEX, ProBound and FIMO data for AUROC analysis
+```{r}
+################################################## Add HT-SELEX data
+# Read HT-SELEX enriched 8-mers
+table_1 <- read.table(paste(paste(Working_dir, "Input_Files/HT-SELEX_data_HOXD13", sep = "/"), "HOXD13_HT-SELEX_Cycle1_enriched_8mers.txt", sep = "/"), header = TRUE)
+table_2 <- read.table(paste(paste(Working_dir, "Input_Files/HT-SELEX_data_HOXD13", sep = "/"), "HOXD13_HT-SELEX_Cycle2_enriched_8mers.txt", sep = "/"), header = TRUE)
+table_3 <- read.table(paste(paste(Working_dir, "Input_Files/HT-SELEX_data_HOXD13", sep = "/"), "HOXD13_HT-SELEX_Cycle3_enriched_8mers.txt", sep = "/"), header = TRUE)
+table_4 <- read.table(paste(paste(Working_dir, "Input_Files/HT-SELEX_data_HOXD13", sep = "/"), "HOXD13_HT-SELEX_Cycle4_enriched_8mers.txt", sep = "/"), header = TRUE)
+
+# Calculate Observed / Expected Ratio
+table_1$Cycle1 <- table_1$ObservedCount/table_1$ExpectedCount
+table_2$Cycle2 <- table_2$ObservedCount/table_2$ExpectedCount
+table_3$Cycle3 <- table_3$ObservedCount/table_3$ExpectedCount
+table_4$Cycle4 <- table_4$ObservedCount/table_4$ExpectedCount
+
+# merge -1 
+table_1 <- table_1[, c("Kmer", "Cycle1")]
+table_2 <- table_2[, c("Kmer", "Cycle2")]
+table_3 <- table_3[, c("Kmer", "Cycle3")]
+table_4 <- table_4[, c("Kmer", "Cycle4")]
+HT_SELEX <- merge(merge(merge(table_1, table_2, by = "Kmer"), table_3, by = "Kmer"), table_4, by = "Kmer")
+
+# merge -2
+TEMP1 <- merge(HOXD13_PBM_Escores_PADIT, HT_SELEX, by.x = "X8.mer_1_8", by.y = "Kmer", all.x = TRUE)
+TEMP2 <- merge(TEMP1, HT_SELEX, by.x = "X8.mer.1_1_8", by.y = "Kmer",  all.x = TRUE)
+TEMP2[is.na(TEMP2)] <- 0
+
+# Keep orientation that is larger
+TEMP2$Cycle1 <- apply(TEMP2[, c("Cycle1.x", "Cycle1.y")], 1, max)
+TEMP2$Cycle2 <- apply(TEMP2[, c("Cycle2.x", "Cycle2.y")], 1, max)
+TEMP2$Cycle3 <- apply(TEMP2[, c("Cycle3.x", "Cycle3.y")], 1, max)
+TEMP2$Cycle4 <- apply(TEMP2[, c("Cycle4.x", "Cycle4.y")], 1, max)
+HOXD13_PBM_Escores_PADIT_HTSELEX <- TEMP2[, which(!colnames(TEMP2) %in% c("Cycle1.x", "Cycle1.y", "Cycle2.x", "Cycle2.y", "Cycle3.x", "Cycle3.y", "Cycle4.x", "Cycle4.y"))]
+
+################################################## Add ProBound data
+# _NNNN
+All8mers_1 <- read.table(paste(paste(Working_dir, "Input_Files/HT-SELEX_data_HOXD13/ProBound", sep = "/"), "All_8mers__NNNN_ProBound.txt", sep = "/"), header = FALSE)
+colnames(All8mers_1) <- c("kmer", "rel_affinity1")
+
+# N_NNNN
+All8mers_2 <- read.table(paste(paste(Working_dir, "Input_Files/HT-SELEX_data_HOXD13/ProBound", sep = "/"), "All_8mers_N_NNN_ProBound.txt", sep = "/"), header = FALSE)
+colnames(All8mers_2) <- c("kmer", "rel_affinity2")
+
+# NN_NNN
+All8mers_3 <- read.table(paste(paste(Working_dir, "Input_Files/HT-SELEX_data_HOXD13/ProBound", sep = "/"), "All_8mers_NN_NN_ProBound.txt", sep = "/"), header = FALSE)
+colnames(All8mers_3) <- c("kmer", "rel_affinity3")
+
+# NNN_N
+All8mers_4 <- read.table(paste(paste(Working_dir, "Input_Files/HT-SELEX_data_HOXD13/ProBound", sep = "/"), "All_8mers_NNN_N_ProBound.txt", sep = "/"), header = FALSE)
+colnames(All8mers_4) <- c("kmer", "rel_affinity4")
+
+# NNNN_
+All8mers_5 <- read.table(paste(paste(Working_dir, "Input_Files/HT-SELEX_data_HOXD13/ProBound", sep = "/"), "All_8mers_NNNN__ProBound.txt", sep = "/"), header = FALSE)
+colnames(All8mers_5) <- c("kmer", "rel_affinity5")
+
+### Merge
+All8mers <- All8mers_1
+All8mers$rel_affinity2 <- All8mers_2$rel_affinity2
+All8mers$rel_affinity3 <- All8mers_3$rel_affinity3
+All8mers$rel_affinity4 <- All8mers_4$rel_affinity4
+All8mers$rel_affinity5 <- All8mers_5$rel_affinity5
+All8mers$trimmed_kmer <- substr(All8mers$kmer, 1, 8)
+All8mers$rel_affinity <- apply(All8mers[, paste("rel_affinity", 1:5, sep = "")], 1, max)
+ProBound_results <- All8mers[, c("trimmed_kmer", "rel_affinity")]
+
+# Merge
+TEMP1 <- merge(HOXD13_PBM_Escores_PADIT_HTSELEX, ProBound_results, 
+               by.x = "X8.mer_1_8", by.y = "trimmed_kmer")
+TEMP2 <- merge(TEMP1, ProBound_results, 
+               by.x = "X8.mer.1_1_8", by.y = "trimmed_kmer")
+HOXD13_PBM_Escores_PADIT_HTSELEX_ProBound <- TEMP2
+HOXD13_PBM_Escores_PADIT_HTSELEX_ProBound$log2_rel_affinity <- log2(apply(HOXD13_PBM_Escores_PADIT_HTSELEX_ProBound[, c("rel_affinity.x", "rel_affinity.y")], 1, max))
+HOXD13_PBM_Escores_PADIT_HTSELEX_ProBound <- HOXD13_PBM_Escores_PADIT_HTSELEX_ProBound[, which(!colnames(HOXD13_PBM_Escores_PADIT_HTSELEX_ProBound) %in% c("rel_affinity.x", "rel_affinity.y"))]
+
+################################################## Add FIMO data
+# 1-8
+All8mers_1 <- read.table(paste(paste(Working_dir, "Input_Files/HT-SELEX_data_HOXD13/FIMO", sep = "/"), "All_8mers.Match.MA0909.1.pos.1.8.txt", sep = "/"), header = FALSE)[, c(1, 8)]
+colnames(All8mers_1) <- c("sequence_name", "p.value1")
+
+# 2-9
+All8mers_2 <- read.table(paste(paste(Working_dir, "Input_Files/HT-SELEX_data_HOXD13/FIMO", sep = "/"), "All_8mers.Match.MA0909.1.pos.2.9.txt", sep = "/"), header = FALSE)[, c(1, 8)]
+colnames(All8mers_2) <- c("sequence_name", "p.value2")
+
+# 3-10
+All8mers_3 <- read.table(paste(paste(Working_dir, "Input_Files/HT-SELEX_data_HOXD13/FIMO", sep = "/"), "All_8mers.Match.MA0909.1.pos.3.10.txt", sep = "/"), header = FALSE)[, c(1, 8)]
+colnames(All8mers_3) <- c("sequence_name", "p.value3")
+
+### Merge-1
+PWM_FIMO <- merge(merge(All8mers_1, All8mers_2, by = "sequence_name"), All8mers_3, by = "sequence_name")
+PWM_FIMO$FIMO.p.value <- apply(PWM_FIMO[, paste("p.value", 1:3, sep = "")], 1, min)
+PWM_FIMO <- PWM_FIMO[, c("sequence_name", "FIMO.p.value")]
+
+### Merge-2
+TEMP1 <- merge(HOXD13_PBM_Escores_PADIT_HTSELEX_ProBound, PWM_FIMO, 
+               by.x = "X8.mer_1_8", by.y = "sequence_name")
+TEMP2 <- merge(HOXD13_PBM_Escores_PADIT_HTSELEX_ProBound, PWM_FIMO, 
+               by.x = "X8.mer.1_1_8", by.y = "sequence_name")
+TEMP3 <- unique(rbind(TEMP1, TEMP2))
+HOXD13_PBM_Escores_PADIT_HTSELEX_ProBound_FIMO <- TEMP3
+HOXD13_PBM_Escores_PADIT_HTSELEX_ProBound_FIMO$FIMO.p.value <- -log10(HOXD13_PBM_Escores_PADIT_HTSELEX_ProBound_FIMO$FIMO.p.value)
+
+```
+
+
+
+
+################################################## Plot AUROC
+```{r}
+library("DescTools")
+Columns_To_Plot <- c("E.score_1_8", "Cycle1", "Cycle2", "Cycle3", "Cycle4", "log2_rel_affinity", "FIMO.p.value")
+# Columns_To_Plot <- c("E.score_1_8", "Z.score_1_8")
+for(k in 1:length(Columns_To_Plot))
+{
+  thresholds <- seq(min(HOXD13_PBM_Escores_PADIT_HTSELEX_ProBound_FIMO[, Columns_To_Plot[k]]), 
+                    max(HOXD13_PBM_Escores_PADIT_HTSELEX_ProBound_FIMO[, Columns_To_Plot[k]]), length.out = 5000)
+  fraction_red <- vector()
+  fraction_black <- vector()
+  for(i in 1:length(thresholds))
+  {
+    HOXD13_PBM_Escores_PADIT_HTSELEX_ProBound_FIMO$AboveThreshold <- (HOXD13_PBM_Escores_PADIT_HTSELEX_ProBound_FIMO[, Columns_To_Plot[k]] > thresholds[i])*1
+    fraction_red[i] <- nrow(HOXD13_PBM_Escores_PADIT_HTSELEX_ProBound_FIMO[which(HOXD13_PBM_Escores_PADIT_HTSELEX_ProBound_FIMO$MPRAactivity == 1 & HOXD13_PBM_Escores_PADIT_HTSELEX_ProBound_FIMO$AboveThreshold == 1),])
+    fraction_black[i] <- nrow(HOXD13_PBM_Escores_PADIT_HTSELEX_ProBound_FIMO[which(HOXD13_PBM_Escores_PADIT_HTSELEX_ProBound_FIMO$MPRAactivity != 1 & HOXD13_PBM_Escores_PADIT_HTSELEX_ProBound_FIMO$AboveThreshold == 1),])
+  }
+  
+  # print AUC
+  # print AUC
+  DF <- cbind(xvalues = fraction_black/(nrow(HOXD13_PBM_Escores_PADIT_HTSELEX_ProBound_FIMO) - sum(HOXD13_PBM_Escores_PADIT_HTSELEX_ProBound_FIMO$MPRAactivity)), 
+              yvalues = fraction_red/sum(HOXD13_PBM_Escores_PADIT_HTSELEX_ProBound_FIMO$MPRAactivity))
+  DF <- as.data.frame(DF)
+  DF <- DF[order(DF$xvalues, decreasing = FALSE),]
+  DF <- rbind(DF, c(1, 1))
+  print(suppressWarnings(AUC(DF$xvalues, DF$yvalues)))
+  
+  # plot
+  if(k == 1)
+  {
+    # Plot AUC curve
+    plot(fraction_black/(nrow(HOXD13_PBM_Escores_PADIT_HTSELEX_ProBound_FIMO) - sum(HOXD13_PBM_Escores_PADIT_HTSELEX_ProBound_FIMO$MPRAactivity)), 
+         fraction_red/sum(HOXD13_PBM_Escores_PADIT_HTSELEX_ProBound_FIMO$MPRAactivity), 
+         type = "l", col = "black")
+    abline(a = 0, b = 1, col = "black")
+  }
+  if(k > 1 & k < 6)
+  {
+    # Plot AUC curve
+    points(fraction_black/(nrow(HOXD13_PBM_Escores_PADIT_HTSELEX_ProBound_FIMO) - sum(HOXD13_PBM_Escores_PADIT_HTSELEX_ProBound_FIMO$MPRAactivity)), 
+         fraction_red/sum(HOXD13_PBM_Escores_PADIT_HTSELEX_ProBound_FIMO$MPRAactivity), 
+         type = "l", col = "cyan3")
+  }
+  if(k == 6)
+  {
+    # Plot AUC curve
+    points(fraction_black/(nrow(HOXD13_PBM_Escores_PADIT_HTSELEX_ProBound_FIMO) - sum(HOXD13_PBM_Escores_PADIT_HTSELEX_ProBound_FIMO$MPRAactivity)), 
+         fraction_red/sum(HOXD13_PBM_Escores_PADIT_HTSELEX_ProBound_FIMO$MPRAactivity), 
+         type = "l", col = "red")
+  }
+  if(k == 7)
+  {
+    # Plot AUC curve
+    points(fraction_black/(nrow(HOXD13_PBM_Escores_PADIT_HTSELEX_ProBound_FIMO) - sum(HOXD13_PBM_Escores_PADIT_HTSELEX_ProBound_FIMO$MPRAactivity)), 
+         fraction_red/sum(HOXD13_PBM_Escores_PADIT_HTSELEX_ProBound_FIMO$MPRAactivity), 
+         type = "l", col = "green")
+  }
+}
+
+```
+
+
+
+# Specificity versus Sensitivity of HT-SELEX data
+```{r}
+# Observed versus Expected threshold
+ratio_threshold <- 3
+
+# Define the active 8-mers
+HOXD13_PBM_Escores_PADIT_sig8mers <- c(HOXD13_PBM_Escores_PADIT$X8.mer_1_8[which(HOXD13_PBM_Escores_PADIT$MPRAactivity == 1)], 
+                                       HOXD13_PBM_Escores_PADIT$X8.mer.1_1_8[which(HOXD13_PBM_Escores_PADIT$MPRAactivity == 1)])
+HOXD13_PBM_Escores_PADIT_sig8mers <- unique(HOXD13_PBM_Escores_PADIT_sig8mers)
+
+# Read HT-SELEX enriched 8-mers
+table_1 <- read.table(paste(paste(Working_dir, "Input_Files/HT-SELEX_data_HOXD13", sep = "/"), "HOXD13_HT-SELEX_Cycle1_enriched_8mers_DefaultParameters.txt", sep = "/"), header = TRUE)
+table_2 <- read.table(paste(paste(Working_dir, "Input_Files/HT-SELEX_data_HOXD13", sep = "/"), "HOXD13_HT-SELEX_Cycle2_enriched_8mers_DefaultParameters.txt", sep = "/"), header = TRUE)
+table_3 <- read.table(paste(paste(Working_dir, "Input_Files/HT-SELEX_data_HOXD13", sep = "/"), "HOXD13_HT-SELEX_Cycle3_enriched_8mers_DefaultParameters.txt", sep = "/"), header = TRUE)
+table_4 <- read.table(paste(paste(Working_dir, "Input_Files/HT-SELEX_data_HOXD13", sep = "/"), "HOXD13_HT-SELEX_Cycle4_enriched_8mers_DefaultParameters.txt", sep = "/"), header = TRUE)
+
+# filter
+table_1 <- table_1[which(table_1$ObservedCount/table_1$ExpectedCount > ratio_threshold),]
+table_2 <- table_2[which(table_2$ObservedCount/table_2$ExpectedCount > ratio_threshold),]
+table_3 <- table_3[which(table_3$ObservedCount/table_3$ExpectedCount > ratio_threshold),]
+table_4 <- table_4[which(table_4$ObservedCount/table_4$ExpectedCount > ratio_threshold),]
+
+# Add relevant columns
+HOXD13_PBM_Escores_PADIT$Cycle1 <- (HOXD13_PBM_Escores_PADIT$X8.mer_1_8 %in% table_1$Kmer | HOXD13_PBM_Escores_PADIT$X8.mer.1_1_8 %in% table_1$Kmer) 
+HOXD13_PBM_Escores_PADIT$Cycle2 <- (HOXD13_PBM_Escores_PADIT$X8.mer_1_8 %in% table_2$Kmer | HOXD13_PBM_Escores_PADIT$X8.mer.1_1_8 %in% table_2$Kmer) 
+HOXD13_PBM_Escores_PADIT$Cycle3 <- (HOXD13_PBM_Escores_PADIT$X8.mer_1_8 %in% table_3$Kmer | HOXD13_PBM_Escores_PADIT$X8.mer.1_1_8 %in% table_3$Kmer) 
+HOXD13_PBM_Escores_PADIT$Cycle4 <- (HOXD13_PBM_Escores_PADIT$X8.mer_1_8 %in% table_4$Kmer | HOXD13_PBM_Escores_PADIT$X8.mer.1_1_8 %in% table_4$Kmer) 
+
+# Number of rows
+num_enriched_HTSELEX <- c(sum(HOXD13_PBM_Escores_PADIT$Cycle1), 
+                          sum(HOXD13_PBM_Escores_PADIT$Cycle2), 
+                          sum(HOXD13_PBM_Escores_PADIT$Cycle3), 
+                          sum(HOXD13_PBM_Escores_PADIT$Cycle4))
+
+# Specificity (red)
+vec1 <- c(nrow(HOXD13_PBM_Escores_PADIT[which(HOXD13_PBM_Escores_PADIT$Cycle1 == 1 & HOXD13_PBM_Escores_PADIT$MPRAactivity == 1),]),
+          nrow(HOXD13_PBM_Escores_PADIT[which(HOXD13_PBM_Escores_PADIT$Cycle2 == 1 & HOXD13_PBM_Escores_PADIT$MPRAactivity == 1),]),
+          nrow(HOXD13_PBM_Escores_PADIT[which(HOXD13_PBM_Escores_PADIT$Cycle3 == 1 & HOXD13_PBM_Escores_PADIT$MPRAactivity == 1),]),
+          nrow(HOXD13_PBM_Escores_PADIT[which(HOXD13_PBM_Escores_PADIT$Cycle4 == 1 & HOXD13_PBM_Escores_PADIT$MPRAactivity == 1),]))
+vec1 <- vec1/num_enriched_HTSELEX
+
+# Sensitivity (blue)
+vec2 <- c(nrow(HOXD13_PBM_Escores_PADIT[which(HOXD13_PBM_Escores_PADIT$Cycle1 == 1 & HOXD13_PBM_Escores_PADIT$MPRAactivity == 1),]),
+          nrow(HOXD13_PBM_Escores_PADIT[which(HOXD13_PBM_Escores_PADIT$Cycle2 == 1 & HOXD13_PBM_Escores_PADIT$MPRAactivity == 1),]),
+          nrow(HOXD13_PBM_Escores_PADIT[which(HOXD13_PBM_Escores_PADIT$Cycle3 == 1 & HOXD13_PBM_Escores_PADIT$MPRAactivity == 1),]),
+          nrow(HOXD13_PBM_Escores_PADIT[which(HOXD13_PBM_Escores_PADIT$Cycle4 == 1 & HOXD13_PBM_Escores_PADIT$MPRAactivity == 1),]))
+vec2 <- vec2/length(HOXD13_PBM_Escores_PADIT_sig8mers)
+
+# 
+plot(1:4, vec1, type = "b", pch = 19, col = "red", ylim = c(0, 1), xlab = "SELEX Round", cex = 4) # Fraction of true positives
+points(1:4, vec2, type = "b", pch = 19, col = "blue", cex = 4) # Fraction of false negatives
+
+```
+
+
+
+# Plot comparison to HT-SELEX
+```{r}
+# Select Cycle
+HOXD13_PBM_Escores_PADIT$Selected_Cycle <- HOXD13_PBM_Escores_PADIT$Cycle4
+
+# Define Colours
+HOXD13_PBM_Escores_PADIT$Colour <- "black"
+HOXD13_PBM_Escores_PADIT$Colour[which(HOXD13_PBM_Escores_PADIT$MPRAactivity == 1)] <- "red"
+HOXD13_PBM_Escores_PADIT$Colour[which(HOXD13_PBM_Escores_PADIT$Selected_Cycle == 1)] <- "cyan3"
+HOXD13_PBM_Escores_PADIT_subset <- HOXD13_PBM_Escores_PADIT 
+
+# Plot -1
+plot(HOXD13_PBM_Escores_PADIT_subset$E.score_1_8[which(HOXD13_PBM_Escores_PADIT$Colour == "black")], 
+     HOXD13_PBM_Escores_PADIT_subset$Mean_log2FC[which(HOXD13_PBM_Escores_PADIT$Colour == "black")], 
+     cex = 0.5, pch = 19, cex.axis = 2, cex.lab = 2,
+     col = "black", 
+     xlim = c(-0.45, 0.5), ylim = c(-0.3, 2.8), 
+     xlab = "E-score", ylab = "PADIT-seq log2 (ALFA-HOXD13 / No-DBD)")
+points(HOXD13_PBM_Escores_PADIT_subset$E.score_1_8[which(HOXD13_PBM_Escores_PADIT$Colour == "red")], 
+       HOXD13_PBM_Escores_PADIT_subset$Mean_log2FC[which(HOXD13_PBM_Escores_PADIT$Colour == "red")],
+       cex = 0.5, pch = 19, col = "red")
+points(HOXD13_PBM_Escores_PADIT_subset$E.score_1_8[which(HOXD13_PBM_Escores_PADIT$Colour == "cyan3")], 
+       HOXD13_PBM_Escores_PADIT_subset$Mean_log2FC[which(HOXD13_PBM_Escores_PADIT$Colour == "cyan3")],
+       cex = 0.5, pch = 19, col = "cyan3")
+abline(h = 0, col = "red")
+table(HOXD13_PBM_Escores_PADIT$Colour)
+
+# Plot -2
+plot(HOXD13_PBM_Escores_PADIT_subset$E.score_1_8[which(HOXD13_PBM_Escores_PADIT$Colour == "black")], 
+     HOXD13_PBM_Escores_PADIT_subset$Mean_log2FC[which(HOXD13_PBM_Escores_PADIT$Colour == "black")], 
+     cex = 0.5, pch = 19, cex.axis = 2, cex.lab = 2,
+     col = "black", 
+     xlim = c(-0.45, 0.5), ylim = c(-0.3, 2.8), 
+     xlab = "E-score", ylab = "PADIT-seq log2 (ALFA-HOXD13 / No-DBD)")
+points(HOXD13_PBM_Escores_PADIT_subset$E.score_1_8[which(HOXD13_PBM_Escores_PADIT$Colour != "black")], 
+       HOXD13_PBM_Escores_PADIT_subset$Mean_log2FC[which(HOXD13_PBM_Escores_PADIT$Colour != "black")],
+       cex = 0.5, pch = 19, 
+       col = HOXD13_PBM_Escores_PADIT$Colour[which(HOXD13_PBM_Escores_PADIT$Colour != "black")])
+abline(h = 0, col = "red")
+table(HOXD13_PBM_Escores_PADIT$Colour)
+
+# Boxplot
+boxplot(HOXD13_PBM_Escores_PADIT$Mean_log2FC[which(HOXD13_PBM_Escores_PADIT$Selected_Cycle == 0 & HOXD13_PBM_Escores_PADIT$MPRAactivity == 1)],
+        HOXD13_PBM_Escores_PADIT$Mean_log2FC[which(HOXD13_PBM_Escores_PADIT$Selected_Cycle == 1 & HOXD13_PBM_Escores_PADIT$MPRAactivity == 1)],
+        notch = TRUE, outline = FALSE, col = c("red", "chartreuse4"))
+wilcox.test(HOXD13_PBM_Escores_PADIT$Mean_log2FC[which(HOXD13_PBM_Escores_PADIT$Selected_Cycle == 0 & HOXD13_PBM_Escores_PADIT$MPRAactivity == 1)],
+            HOXD13_PBM_Escores_PADIT$Mean_log2FC[which(HOXD13_PBM_Escores_PADIT$Selected_Cycle == 1 & HOXD13_PBM_Escores_PADIT$MPRAactivity == 1)])
+
+# Table
+HOXD13_PBM_Escores_PADIT$MPRAactivity[is.na(HOXD13_PBM_Escores_PADIT$MPRAactivity)] <- 0
+table(HOXD13_PBM_Escores_PADIT$Selected_Cycle, HOXD13_PBM_Escores_PADIT$MPRAactivity)
+
+
+##########################
+HOXD13_PBM_Escores_PADIT$InteractionTerm <- interaction(HOXD13_PBM_Escores_PADIT$Selected_Cycle, HOXD13_PBM_Escores_PADIT$MPRAactivity)
+boxplot(HOXD13_PBM_Escores_PADIT$E.score_1_8 ~ HOXD13_PBM_Escores_PADIT$InteractionTerm,
+        notch = TRUE, outline = FALSE, col = "yellow")
+pairwise.wilcox.test(HOXD13_PBM_Escores_PADIT$E.score_1_8, HOXD13_PBM_Escores_PADIT$InteractionTerm)
+table(HOXD13_PBM_Escores_PADIT$InteractionTerm)
+
+```
+
+
+# compare to ProBound results
+```{r}
+# _NNNN
+All8mers_1 <- read.table(paste(paste(Working_dir, "Input_Files/HT-SELEX_data_HOXD13/ProBound", sep = "/"), "All_8mers__NNNN_ProBound.txt", sep = "/"), header = FALSE)
+colnames(All8mers_1) <- c("kmer", "rel_affinity1")
+
+# N_NNNN
+All8mers_2 <- read.table(paste(paste(Working_dir, "Input_Files/HT-SELEX_data_HOXD13/ProBound", sep = "/"), "All_8mers_N_NNN_ProBound.txt", sep = "/"), header = FALSE)
+colnames(All8mers_2) <- c("kmer", "rel_affinity2")
+
+# NN_NNN
+All8mers_3 <- read.table(paste(paste(Working_dir, "Input_Files/HT-SELEX_data_HOXD13/ProBound", sep = "/"), "All_8mers_NN_NN_ProBound.txt", sep = "/"), header = FALSE)
+colnames(All8mers_3) <- c("kmer", "rel_affinity3")
+
+# NNN_N
+All8mers_4 <- read.table(paste(paste(Working_dir, "Input_Files/HT-SELEX_data_HOXD13/ProBound", sep = "/"), "All_8mers_NNN_N_ProBound.txt", sep = "/"), header = FALSE)
+colnames(All8mers_4) <- c("kmer", "rel_affinity4")
+
+# NNNN_
+All8mers_5 <- read.table(paste(paste(Working_dir, "Input_Files/HT-SELEX_data_HOXD13/ProBound", sep = "/"), "All_8mers_NNNN__ProBound.txt", sep = "/"), header = FALSE)
+colnames(All8mers_5) <- c("kmer", "rel_affinity5")
+
+### Merge
+All8mers <- All8mers_1
+All8mers$rel_affinity2 <- All8mers_2$rel_affinity2
+All8mers$rel_affinity3 <- All8mers_3$rel_affinity3
+All8mers$rel_affinity4 <- All8mers_4$rel_affinity4
+All8mers$rel_affinity5 <- All8mers_5$rel_affinity5
+All8mers$trimmed_kmer <- substr(All8mers$kmer, 1, 8)
+All8mers$rel_affinity <- apply(All8mers[, paste("rel_affinity", 1:5, sep = "")], 1, max)
+ProBound_results <- All8mers[, c("trimmed_kmer", "rel_affinity")]
+
+# Merge
+TEMP1 <- merge(HOXD13_PBM_Escores_PADIT, ProBound_results, 
+               by.x = "X8.mer_1_8", by.y = "trimmed_kmer")
+TEMP2 <- merge(TEMP1, ProBound_results, 
+               by.x = "X8.mer.1_1_8", by.y = "trimmed_kmer")
+HOXD13_PBM_Escores_PADIT_ProBound <- TEMP2
+HOXD13_PBM_Escores_PADIT_ProBound$log2_rel_affinity <- log2(apply(HOXD13_PBM_Escores_PADIT_ProBound[, c("rel_affinity.x", "rel_affinity.y")], 1, max))
+
+# Define threshold for log2_rel_affinity
+log2_rel_affinity_threshold <- -5
+HOXD13_PBM_Escores_PADIT_ProBound$log2_rel_affinity_sig <- (HOXD13_PBM_Escores_PADIT_ProBound$log2_rel_affinity > log2_rel_affinity_threshold)*1
+
+# Scatter plot
+HOXD13_PBM_Escores_PADIT_ProBound$Colour <- "black"
+HOXD13_PBM_Escores_PADIT_ProBound$Colour[which(HOXD13_PBM_Escores_PADIT_ProBound$MPRAactivity == 1)] <- "red"
+HOXD13_PBM_Escores_PADIT_ProBound$Colour[which(HOXD13_PBM_Escores_PADIT_ProBound$MPRAactivity == 1 & HOXD13_PBM_Escores_PADIT_ProBound$log2_rel_affinity_sig == 1)] <- "cyan3"
+plot(HOXD13_PBM_Escores_PADIT_ProBound$log2_rel_affinity[which(HOXD13_PBM_Escores_PADIT_ProBound$Colour == "black")],
+     HOXD13_PBM_Escores_PADIT_ProBound$Mean_log2FC[which(HOXD13_PBM_Escores_PADIT_ProBound$Colour == "black")], 
+     pch = 19, col = HOXD13_PBM_Escores_PADIT_ProBound$Colour[which(HOXD13_PBM_Escores_PADIT_ProBound$Colour == "black")], xlim = c(-22, -1.5), ylim = c(-0.25, 2.75))
+points(HOXD13_PBM_Escores_PADIT_ProBound$log2_rel_affinity[which(HOXD13_PBM_Escores_PADIT_ProBound$Colour != "black")],
+     HOXD13_PBM_Escores_PADIT_ProBound$Mean_log2FC[which(HOXD13_PBM_Escores_PADIT_ProBound$Colour != "black")], 
+     pch = 19, col = HOXD13_PBM_Escores_PADIT_ProBound$Colour[which(HOXD13_PBM_Escores_PADIT_ProBound$Colour != "black")])
+abline(v = log2_rel_affinity_threshold, col = "blue")
+
+# Boxplot
+boxplot(HOXD13_PBM_Escores_PADIT_ProBound$Mean_log2FC[which(HOXD13_PBM_Escores_PADIT_ProBound$log2_rel_affinity_sig == 0 & HOXD13_PBM_Escores_PADIT_ProBound$MPRAactivity == 1)], 
+        HOXD13_PBM_Escores_PADIT_ProBound$Mean_log2FC[which(HOXD13_PBM_Escores_PADIT_ProBound$log2_rel_affinity_sig == 1 & HOXD13_PBM_Escores_PADIT_ProBound$MPRAactivity == 1)], 
+        notch = TRUE, outline = FALSE, col = c("red", "chartreuse4"))
+wilcox.test(HOXD13_PBM_Escores_PADIT_ProBound$Mean_log2FC[which(HOXD13_PBM_Escores_PADIT_ProBound$log2_rel_affinity_sig == 0 & HOXD13_PBM_Escores_PADIT_ProBound$MPRAactivity == 1)], 
+        HOXD13_PBM_Escores_PADIT_ProBound$Mean_log2FC[which(HOXD13_PBM_Escores_PADIT_ProBound$log2_rel_affinity_sig == 1 & HOXD13_PBM_Escores_PADIT_ProBound$MPRAactivity == 1)])
+table(HOXD13_PBM_Escores_PADIT_ProBound$log2_rel_affinity_sig, HOXD13_PBM_Escores_PADIT_ProBound$MPRAactivity)
+
+```
+
+# compare to FIMO results
+```{r}
+# define colours
+HOXD13_PBM_Escores_PADIT_HTSELEX_ProBound_FIMO$Colour <- "black"
+HOXD13_PBM_Escores_PADIT_HTSELEX_ProBound_FIMO$Colour[which(HOXD13_PBM_Escores_PADIT_HTSELEX_ProBound_FIMO$MPRAactivity == 1)] <- "red"
+HOXD13_PBM_Escores_PADIT_HTSELEX_ProBound_FIMO$Colour[which(HOXD13_PBM_Escores_PADIT_HTSELEX_ProBound_FIMO$FIMO.p.value > -log10(0.001))] <- "cyan3"
+
+# plot
+plot(HOXD13_PBM_Escores_PADIT_HTSELEX_ProBound_FIMO$E.score_1_8[which(HOXD13_PBM_Escores_PADIT_HTSELEX_ProBound_FIMO$Colour == "black")],
+     HOXD13_PBM_Escores_PADIT_HTSELEX_ProBound_FIMO$Mean_log2FC[which(HOXD13_PBM_Escores_PADIT_HTSELEX_ProBound_FIMO$Colour == "black")], 
+     cex = 0.5, pch = 19, col = HOXD13_PBM_Escores_PADIT_HTSELEX_ProBound_FIMO$Colour[which(HOXD13_PBM_Escores_PADIT_HTSELEX_ProBound_FIMO$Colour == "black")], xlim = c(-0.5, 0.5), ylim = c(-0.25, 2.75))
+points(HOXD13_PBM_Escores_PADIT_HTSELEX_ProBound_FIMO$E.score_1_8[which(HOXD13_PBM_Escores_PADIT_HTSELEX_ProBound_FIMO$Colour != "black")],
+     HOXD13_PBM_Escores_PADIT_HTSELEX_ProBound_FIMO$Mean_log2FC[which(HOXD13_PBM_Escores_PADIT_HTSELEX_ProBound_FIMO$Colour != "black")], 
+     cex = 0.5, pch = 19, col = HOXD13_PBM_Escores_PADIT_HTSELEX_ProBound_FIMO$Colour[which(HOXD13_PBM_Escores_PADIT_HTSELEX_ProBound_FIMO$Colour != "black")])
+abline(h = 0, col = "red")
+
+# boxplot
+boxplot(HOXD13_PBM_Escores_PADIT_HTSELEX_ProBound_FIMO$Mean_log2FC[which(HOXD13_PBM_Escores_PADIT_HTSELEX_ProBound_FIMO$Colour == "red")],
+        HOXD13_PBM_Escores_PADIT_HTSELEX_ProBound_FIMO$Mean_log2FC[which(HOXD13_PBM_Escores_PADIT_HTSELEX_ProBound_FIMO$Colour == "cyan3")], 
+        col = c("red", "cyan3"), notch = TRUE, outline = FALSE)
+table(HOXD13_PBM_Escores_PADIT_HTSELEX_ProBound_FIMO$Colour)
+nrow(HOXD13_PBM_Escores_PADIT_HTSELEX_ProBound_FIMO[which(HOXD13_PBM_Escores_PADIT_HTSELEX_ProBound_FIMO$MPRAactivity == 1 & HOXD13_PBM_Escores_PADIT_HTSELEX_ProBound_FIMO$Colour == "cyan3"), ])
+
+```
+

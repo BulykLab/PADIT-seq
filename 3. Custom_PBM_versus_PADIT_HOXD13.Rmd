@@ -1,0 +1,651 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+
+# Set Global Variables here
+```{r}
+# Please change the working directory
+Working_dir <- "~/Desktop/AVATAR/PADIT-seq-Manuscript/Code_Availability_Revision/"
+
+# Please be sure to install these libraries
+library(pheatmap); library(ggplot2); library(DESeq2); library(ggrepel); library("stringr")
+
+# FDR cutoff (do not change)
+Cutoff_Value <- 0.05
+
+```
+
+
+
+# Read PADIT-seq data
+```{r}
+# Read HOXD13 PBM data
+HOXD13_PBM_Escores <- read.table(paste(paste(Working_dir, "Input_Files/PBM_data_HOXD13", sep = "/"), "HOXD13_REF_R2_8mers_11111111.txt", sep = "/"), header = TRUE)
+
+################################################################# Read HOXD13 8-mer PADIT-seq log2foldchange values for the 3 registers
+Register_1_8 <- read.table(paste(paste(Working_dir, "Output_Files", sep = "/"), "HOXD13_all8mers_1_8_median.txt", sep = "/"), header = TRUE)
+Register_2_9 <- read.table(paste(paste(Working_dir, "Output_Files", sep = "/"), "HOXD13_all8mers_2_9_median.txt", sep = "/"), header = TRUE)
+Register_3_10 <- read.table(paste(paste(Working_dir, "Output_Files", sep = "/"), "HOXD13_all8mers_3_10_median.txt", sep = "/"), header = TRUE)
+
+# Format
+colnames(Register_1_8) <- paste(colnames(Register_1_8), "1_8", sep = "_")
+colnames(Register_2_9) <- paste(colnames(Register_2_9), "2_9", sep = "_")
+colnames(Register_3_10) <- paste(colnames(Register_3_10), "3_10", sep = "_")
+TEMP1 <- merge(Register_1_8, Register_2_9, 
+               by.x = "X8.mer_1_8", by.y = "X8.mer_2_9")
+TEMP2 <- merge(TEMP1, Register_3_10, 
+               by.x = "X8.mer_1_8", by.y = "X8.mer_3_10")
+HOXD13_PBM_Escores_PADIT <- TEMP2; rm(TEMP1); rm(TEMP2)
+
+#
+HOXD13_PBM_Escores_PADIT$padj_1_8[is.na(HOXD13_PBM_Escores_PADIT$padj_1_8)] <- 1
+HOXD13_PBM_Escores_PADIT$padj_2_9[is.na(HOXD13_PBM_Escores_PADIT$padj_2_9)] <- 1
+HOXD13_PBM_Escores_PADIT$padj_3_10[is.na(HOXD13_PBM_Escores_PADIT$padj_3_10)] <- 1
+
+# 
+HOXD13_PBM_Escores_PADIT$Mean_log2FC <- apply(HOXD13_PBM_Escores_PADIT[,c("log2FoldChange_1_8", "log2FoldChange_2_9", "log2FoldChange_3_10")], 1, median)
+HOXD13_PBM_Escores_PADIT$Max_padj <- apply(HOXD13_PBM_Escores_PADIT[,c("padj_1_8", "padj_2_9", "padj_3_10")], 1, median)
+
+# Re-define MPRA activity
+HOXD13_PBM_Escores_PADIT$MPRAactivity <- (HOXD13_PBM_Escores_PADIT$Mean_log2FC > 0 & HOXD13_PBM_Escores_PADIT$Max_padj < 0.10)*1 + (HOXD13_PBM_Escores_PADIT$Mean_log2FC > 0 & HOXD13_PBM_Escores_PADIT$Max_padj < 0.05)*1 + (HOXD13_PBM_Escores_PADIT$Mean_log2FC > 0 & HOXD13_PBM_Escores_PADIT$Max_padj < 0.01)*1
+
+# Assign colour
+HOXD13_PBM_Escores_PADIT$Colour <- "black"
+HOXD13_PBM_Escores_PADIT$Colour[which(HOXD13_PBM_Escores_PADIT$MPRAactivity == 1)] <- "goldenrod"
+HOXD13_PBM_Escores_PADIT$Colour[which(HOXD13_PBM_Escores_PADIT$MPRAactivity == 2)] <- "cyan3"
+HOXD13_PBM_Escores_PADIT$Colour[which(HOXD13_PBM_Escores_PADIT$MPRAactivity == 3)] <- "red"
+
+```
+
+
+
+# Read and format custom PBM data
+```{r}
+# Read data frame with Alexa 488 values
+Alexa488_signal_df <- read.table(paste(paste(Working_dir, "Input_Files/Custom_PBM/Shubham_custom_PBM_Run1/PBM_experiment_HOXD13_EGR1", sep = "/"), "Alexa488_signalValues_all8chambers_formattedColumns.txt", sep = "/"), header = TRUE)
+
+# subset
+Alexa488_signal_df <- Alexa488_signal_df[which(Alexa488_signal_df$ID_1 %in% c("HOXD13", "EGR1")), ]
+
+# Obtain Median values for each chamber
+kmers <- unique(Alexa488_signal_df$ID_5)
+kmers_median_df <- matrix(nrow = length(kmers), ncol = 8)
+for(i in 1:length(kmers))
+{
+  Alexa488_signal_df_subset <- Alexa488_signal_df[which(Alexa488_signal_df$ID_5 == kmers[i]), 
+                                                  c("Alexa488_Chamber1_HOXD13_500nM", "Alexa488_Chamber2_HOXD13_800nM", "Alexa488_Chamber3_HOXD13_300nM", "Alexa488_Chamber4_HOXD13_500nM", "Alexa488_Chamber5_EGR1_500nM", "Alexa488_Chamber6_EGR1_800nM", "Alexa488_Chamber7_EGR1_500nM", "Alexa488_Chamber8_EGR1_300nM")]
+  
+  # Get median of the 8 replicates
+  kmers_median_df[i, ] <- apply(Alexa488_signal_df_subset, 2, median)
+  
+  # Get median of top 4 values for each column
+  # kmers_median_df[i, ] <- apply(Alexa488_signal_df_subset, 2, function(x) { median(sort(x, decreasing = TRUE)[1:4]) })
+}
+rownames(kmers_median_df) <- kmers
+colnames(kmers_median_df) <- c("Alexa488_Chamber1_HOXD13_500nM", "Alexa488_Chamber2_HOXD13_800nM", "Alexa488_Chamber3_HOXD13_300nM", "Alexa488_Chamber4_HOXD13_500nM", "Alexa488_Chamber5_EGR1_500nM", "Alexa488_Chamber6_EGR1_800nM", "Alexa488_Chamber7_EGR1_500nM", "Alexa488_Chamber8_EGR1_300nM")
+
+# Subset the relevant column
+kmers_median_df <- kmers_median_df[, c("Alexa488_Chamber2_HOXD13_800nM")]
+
+```
+
+
+
+```{r}
+# Function to get reverse complement of DNA sequence
+get_reverse_complement <- function(seq) {
+  comp_map <- c(A="T", T="A", G="C", C="G", N="N")
+  rev_comp <- paste(rev(comp_map[strsplit(seq, "")[[1]]]), collapse="")
+  return(rev_comp)
+}
+
+# Get all sequences
+seqs <- names(kmers_median_df)
+
+# Keep only one sequence from each pair
+used_seqs <- character(0)
+unique_pairs <- list()
+
+for(seq in seqs) {
+  if(!(seq %in% used_seqs)) {
+    rev_comp <- get_reverse_complement(seq)
+    used_seqs <- c(used_seqs, seq, rev_comp)
+    unique_pairs[[seq]] <- c(kmers_median_df[seq], 
+                            if(rev_comp %in% names(kmers_median_df)) kmers_median_df[rev_comp] else NA)
+  }
+}
+
+# Create dataframe
+sequences_df <- do.call(rbind, unique_pairs)
+sequences_df <- as.data.frame(sequences_df)
+colnames(sequences_df) <- c("forward", "reverse")
+
+# Take the first 8 characters only
+sequences_df$TFBS <- rownames(sequences_df)
+
+# Format columns
+sequences_df <- sequences_df[, c("TFBS", "forward", "reverse")]
+
+# Compare both orientations to each other
+plot(sequences_df$forward, 
+     sequences_df$reverse, 
+     pch = 19, cex = 0.5, col = "black")
+
+```
+
+
+# Merge PADIT-seq data and custom PBM data
+```{r}
+# Define 8-mers
+for(i in 1:nrow(sequences_df))
+{
+  if(nchar(rownames(sequences_df)[i]) == 9)
+  {
+    sequences_df$TFBS[i] <- substr(rownames(sequences_df)[i], 2, 9)
+  }
+}
+
+# Merge 8-mers
+TEMP1 <- merge(HOXD13_PBM_Escores_PADIT, 
+               sequences_df, 
+               by.x = "X8.mer_1_8", by.y = "TFBS")
+TEMP2 <- merge(HOXD13_PBM_Escores_PADIT, 
+               sequences_df, 
+               by.x = "X8.mer.1_1_8", by.y = "TFBS")
+
+# Define Custom PBM signal
+PADIT_PBM_DF <- unique(rbind(TEMP1, TEMP2))
+PADIT_PBM_DF$Custom_PBM_log10signal <- log10(apply(PADIT_PBM_DF[, c("forward", "reverse")], 1, max))
+
+# Scatter plot
+plot(PADIT_PBM_DF$Custom_PBM_log10signal[which(PADIT_PBM_DF$Colour %in% c("black", "red"))], 
+     PADIT_PBM_DF$Mean_log2FC[which(PADIT_PBM_DF$Colour %in% c("black", "red"))], 
+     col = PADIT_PBM_DF$Colour[which(PADIT_PBM_DF$Colour %in% c("black", "red"))],
+     pch = 19, cex = 1, xlim = c(1.8, 3.9), 
+     xlab = "log10(median PBM signal)", ylab = "PADIT-seq activity")
+points(PADIT_PBM_DF$Custom_PBM_log10signal[which(! PADIT_PBM_DF$Colour %in% c("black", "red"))], 
+       PADIT_PBM_DF$Mean_log2FC[which(! PADIT_PBM_DF$Colour %in% c("black", "red"))], 
+       col = PADIT_PBM_DF$Colour[which(! PADIT_PBM_DF$Colour %in% c("black", "red"))],
+            pch = 19, cex = 1)
+
+# Correlation
+cor.test(PADIT_PBM_DF$Custom_PBM_log10signal, 
+         PADIT_PBM_DF$Mean_log2FC)
+
+# Boxplot
+boxplot(PADIT_PBM_DF$Custom_PBM_log10signal ~ PADIT_PBM_DF$MPRAactivity, 
+        notch = TRUE, outline = FALSE)
+
+# wilcox test
+pairwise.wilcox.test(PADIT_PBM_DF$Custom_PBM_log10signal , PADIT_PBM_DF$MPRAactivity)
+
+# How many in each category?
+table(PADIT_PBM_DF$MPRAactivity)
+
+```
+
+
+# SNP predictions and Custom PBM data
+```{r}
+# Read data frame with Alexa 488 values
+Alexa488_signal_df <- read.table(paste(paste(Working_dir, "Input_Files/Custom_PBM/Shubham_custom_PBM_Run1/PBM_experiment_HOXD13_EGR1", sep = "/"), "Alexa488_signalValues_all8chambers_formattedColumns.txt", sep = "/"), header = TRUE)
+head(Alexa488_signal_df)
+
+# Read table containing SNP data
+SNPs_DF <- read.table(paste(paste(Working_dir, "Input_Files/Custom_PBM/Design", sep = "/"), "SNPs_toTest_with_customPBM_HOXD13.txt", sep = "/"), header = TRUE)
+head(SNPs_DF)
+
+# Obtain Custom PBM data for each SNP
+for(i in 1:nrow(SNPs_DF))
+{
+  SNP <- SNPs_DF$SNP_id[i]
+  
+  # Foward
+  Fwd_or_Rev <- c("FWD", "REV")[1]
+  Alexa488_signal_df_SNP_REF <- Alexa488_signal_df[which(substr(Alexa488_signal_df$ID, 1, nchar(paste(SNP, "REF__FWD", sep = "__"))) == paste(SNP, paste("REF", Fwd_or_Rev, sep = "__"), sep = "__")), ]
+  Alexa488_signal_df_SNP_ALT <- Alexa488_signal_df[which(substr(Alexa488_signal_df$ID, 1, nchar(paste(SNP, "ALT__FWD", sep = "__"))) == paste(SNP, paste("ALT", Fwd_or_Rev, sep = "__"), sep = "__")), ]
+  CustomPBM_Median_Diff_Fwd <- log10(median(c(Alexa488_signal_df_SNP_REF$Alexa488_Chamber1_HOXD13_500nM, Alexa488_signal_df_SNP_REF$Alexa488_Chamber4_HOXD13_500nM))) - log10(median(c(Alexa488_signal_df_SNP_ALT$Alexa488_Chamber1_HOXD13_500nM, Alexa488_signal_df_SNP_ALT$Alexa488_Chamber4_HOXD13_500nM)))
+  CustomPBM_pvalue_Fwd <- t.test(log10(c(Alexa488_signal_df_SNP_REF$Alexa488_Chamber1_HOXD13_500nM, Alexa488_signal_df_SNP_REF$Alexa488_Chamber4_HOXD13_500nM)), log10(c(Alexa488_signal_df_SNP_ALT$Alexa488_Chamber1_HOXD13_500nM, Alexa488_signal_df_SNP_ALT$Alexa488_Chamber4_HOXD13_500nM)))$p.value
+  
+  # Reverse
+  Fwd_or_Rev <- c("FWD", "REV")[2]
+  Alexa488_signal_df_SNP_REF <- Alexa488_signal_df[which(substr(Alexa488_signal_df$ID, 1, nchar(paste(SNP, "REF__FWD", sep = "__"))) == paste(SNP, paste("REF", Fwd_or_Rev, sep = "__"), sep = "__")), ]
+  Alexa488_signal_df_SNP_ALT <- Alexa488_signal_df[which(substr(Alexa488_signal_df$ID, 1, nchar(paste(SNP, "ALT__FWD", sep = "__"))) == paste(SNP, paste("ALT", Fwd_or_Rev, sep = "__"), sep = "__")), ]
+  CustomPBM_Median_Diff_Rev <- log10(median(c(Alexa488_signal_df_SNP_REF$Alexa488_Chamber1_HOXD13_500nM, Alexa488_signal_df_SNP_REF$Alexa488_Chamber4_HOXD13_500nM))) - log10(median(c(Alexa488_signal_df_SNP_ALT$Alexa488_Chamber1_HOXD13_500nM, Alexa488_signal_df_SNP_ALT$Alexa488_Chamber4_HOXD13_500nM)))
+  CustomPBM_pvalue_Rev <- t.test(log10(c(Alexa488_signal_df_SNP_REF$Alexa488_Chamber1_HOXD13_500nM, Alexa488_signal_df_SNP_REF$Alexa488_Chamber4_HOXD13_500nM)), 
+                                 log10(c(Alexa488_signal_df_SNP_ALT$Alexa488_Chamber1_HOXD13_500nM, Alexa488_signal_df_SNP_ALT$Alexa488_Chamber4_HOXD13_500nM)))$p.value
+  
+  # Choose orientation with lowest p-value and assign to DF
+  if(CustomPBM_pvalue_Fwd < CustomPBM_pvalue_Rev)
+  {
+    SNPs_DF$CustomPBM_Median_Diff[i] <- CustomPBM_Median_Diff_Fwd
+    SNPs_DF$CustomPBM_pvalue[i] <- CustomPBM_pvalue_Fwd
+  }
+  if(CustomPBM_pvalue_Fwd >= CustomPBM_pvalue_Rev)
+  {
+    SNPs_DF$CustomPBM_Median_Diff[i] <- CustomPBM_Median_Diff_Rev
+    SNPs_DF$CustomPBM_pvalue[i] <- CustomPBM_pvalue_Rev
+  }
+}
+
+# FDR
+SNPs_DF$CustomPBM_pvalue_adj <- p.adjust(SNPs_DF$CustomPBM_pvalue, method = "fdr")
+table(SNPs_DF$CustomPBM_pvalue_adj < 0.05)
+
+# Some tables
+table(SNPs_DF$PADIT_prediction, SNPs_DF$CustomPBM_pvalue_adj < 0.05)
+
+
+```
+
+
+
+
+```{r}
+# Assign Colour
+SNPs_DF$Colour <- "black"
+SNPs_DF$Colour[which(SNPs_DF$CustomPBM_pvalue_adj < 0.05)] <- "red"
+
+# Compare to SNP-SELEX PBS 
+plot(SNPs_DF$pbs, 
+     SNPs_DF$CustomPBM_Median_Diff, 
+     pch = 19, cex = 1, col = SNPs_DF$Colour)
+abline(h = 0, col = "black")
+abline(v = 0, col = "black")
+cor.test(SNPs_DF$pbs, SNPs_DF$CustomPBM_Median_Diff)
+
+# Compare to PADIT-seq predictions
+plot(SNPs_DF$Diff_log2FC, 
+     SNPs_DF$CustomPBM_Median_Diff, 
+     pch = 19, cex = 1, col = SNPs_DF$Colour)
+abline(h = 0, col = "black")
+abline(v = 0, col = "black")
+cor.test(SNPs_DF$Diff_log2FC, 
+         SNPs_DF$CustomPBM_Median_Diff)
+
+# Compare to PADIT-seq predictions
+plot(SNPs_DF$Diff_log2FC[which(SNPs_DF$PBS.PADIT != 1.1)], 
+     SNPs_DF$CustomPBM_Median_Diff[which(SNPs_DF$PBS.PADIT != 1.1)], 
+     pch = 19, cex = 1, col = SNPs_DF$Colour[which(SNPs_DF$PBS.PADIT != 1.1)])
+abline(h = 0, col = "black")
+abline(v = 0, col = "black")
+cor.test(SNPs_DF$Diff_log2FC[which(SNPs_DF$PBS.PADIT != 1.1)], 
+         SNPs_DF$CustomPBM_Median_Diff[which(SNPs_DF$PBS.PADIT != 1.1)])
+
+# Compare to PADIT-seq predictions
+plot(SNPs_DF$Diff_log2FC[which(SNPs_DF$PBS.PADIT == 0.1)], 
+     SNPs_DF$CustomPBM_Median_Diff[which(SNPs_DF$PBS.PADIT == 0.1)], 
+     pch = 19, cex = 1, col = SNPs_DF$Colour[which(SNPs_DF$PBS.PADIT == 0.1)])
+abline(h = 0, col = "black")
+abline(v = 0, col = "black")
+cor.test(SNPs_DF$Diff_log2FC[which(SNPs_DF$PBS.PADIT == 0.1)], 
+         SNPs_DF$CustomPBM_Median_Diff[which(SNPs_DF$PBS.PADIT == 0.1)])
+
+# Compare to PADIT-seq predictions
+plot(SNPs_DF$Diff_log2FC[which(SNPs_DF$PBS.PADIT %in% c(0.1, 1.1) )], 
+     SNPs_DF$CustomPBM_Median_Diff[which(SNPs_DF$PBS.PADIT %in% c(0.1, 1.1))], 
+     pch = 19, cex = 1, col = SNPs_DF$Colour[which(SNPs_DF$PBS.PADIT %in% c(0.1, 1.1) )])
+abline(h = 0, col = "black")
+abline(v = 0, col = "black")
+cor.test(SNPs_DF$Diff_log2FC[which(SNPs_DF$PBS.PADIT %in% c(0.1, 1.1))], 
+         SNPs_DF$CustomPBM_Median_Diff[which(SNPs_DF$PBS.PADIT %in% c(0.1, 1.1))])
+
+# Compare to PADIT-seq predictions
+plot(SNPs_DF$Diff_log2FC[which(SNPs_DF$PBS.PADIT == 0)], 
+     SNPs_DF$CustomPBM_Median_Diff[which(SNPs_DF$PBS.PADIT == 0)], 
+     pch = 19, cex = 1, col = SNPs_DF$Colour)
+abline(h = 0, col = "black")
+abline(v = 0, col = "black")
+cor.test(SNPs_DF$Diff_log2FC[which(SNPs_DF$PBS.PADIT == 0)], 
+         SNPs_DF$CustomPBM_Median_Diff[which(SNPs_DF$PBS.PADIT == 0)])
+
+# Compare to MotifBreakR predictions
+plot(-1*SNPs_DF$alleleEffectSize, 
+     SNPs_DF$CustomPBM_Median_Diff, 
+     pch = 19, cex = 1, col = SNPs_DF$Colour)
+abline(h = 0, col = "black")
+cor.test(-1*SNPs_DF$alleleEffectSize, 
+         SNPs_DF$CustomPBM_Median_Diff)
+
+# Compare to MotifBreakR predictions
+plot(SNPs_DF$alleleEffectSize[which(SNPs_DF$effect == "none")], 
+     SNPs_DF$CustomPBM_Median_Diff[which(SNPs_DF$effect == "none")], 
+     pch = 19, cex = 1, col = SNPs_DF$Colour)
+abline(h = 0, col = "black")
+cor.test(SNPs_DF$alleleEffectSize[which(SNPs_DF$effect == "none")], 
+         SNPs_DF$CustomPBM_Median_Diff[which(SNPs_DF$effect == "none")])
+
+# Compare to MotifBreakR predictions
+plot(SNPs_DF$alleleEffectSize[which(SNPs_DF$effect %in% c("strong", "weak"))], 
+     SNPs_DF$CustomPBM_Median_Diff[which(SNPs_DF$effect %in% c("strong", "weak"))], 
+     pch = 19, cex = 1, col = SNPs_DF$Colour)
+abline(h = 0, col = "black")
+cor.test(SNPs_DF$alleleEffectSize[which(SNPs_DF$effect %in% c("strong", "weak"))], 
+         SNPs_DF$CustomPBM_Median_Diff[which(SNPs_DF$effect %in% c("strong", "weak"))])
+
+```
+
+
+
+# Plot individual SNPs
+
+```{r}
+# Read data frame with Alexa 488 values
+Alexa488_signal_df <- read.table(paste(paste(Working_dir, "Input_Files/Custom_PBM/Shubham_custom_PBM_Run1/PBM_experiment_HOXD13_EGR1", sep = "/"), "Alexa488_signalValues_all8chambers_formattedColumns.txt", sep = "/"), header = TRUE)
+
+# subset
+# "chr3:123312315:A:T" # "chr2:161607018:G:A" # "rs606231147" 
+SNP <- "chr3:123312315:A:T"
+
+for(i in 1:2)
+{
+  Fwd_or_Rev <- c("FWD", "REV")[i]
+  Alexa488_signal_df_SNP_REF <- Alexa488_signal_df[which(substr(Alexa488_signal_df$ID, 1, nchar(paste(SNP, "REF__FWD", sep = "__"))) == paste(SNP, paste("REF", Fwd_or_Rev, sep = "__"), sep = "__")), ]
+  Alexa488_signal_df_SNP_ALT <- Alexa488_signal_df[which(substr(Alexa488_signal_df$ID, 1, nchar(paste(SNP, "ALT__FWD", sep = "__"))) == paste(SNP, paste("ALT", Fwd_or_Rev, sep = "__"), sep = "__")), ]
+  
+  ########################## 500 nM
+  # Boxplot
+  boxplot(log10(c(Alexa488_signal_df_SNP_REF$Alexa488_Chamber1_HOXD13_500nM, Alexa488_signal_df_SNP_REF$Alexa488_Chamber4_HOXD13_500nM)),
+          log10(c(Alexa488_signal_df_SNP_ALT$Alexa488_Chamber1_HOXD13_500nM, Alexa488_signal_df_SNP_ALT$Alexa488_Chamber4_HOXD13_500nM)), 
+          notch = FALSE, outline = FALSE, col = c("lightblue", "lightblue"))
+  
+  # Add jittered points
+  points(jitter(rep(1, length(c(Alexa488_signal_df_SNP_REF$Alexa488_Chamber1_HOXD13_500nM, Alexa488_signal_df_SNP_REF$Alexa488_Chamber4_HOXD13_500nM))), factor = 4),
+         log10(c(Alexa488_signal_df_SNP_REF$Alexa488_Chamber1_HOXD13_500nM, Alexa488_signal_df_SNP_REF$Alexa488_Chamber4_HOXD13_500nM)),
+         pch = 19, col = alpha("red", 1), cex = 2)
+  points(jitter(rep(2, length(c(Alexa488_signal_df_SNP_ALT$Alexa488_Chamber1_HOXD13_500nM, Alexa488_signal_df_SNP_ALT$Alexa488_Chamber4_HOXD13_500nM))), factor = 4),
+         log10(c(Alexa488_signal_df_SNP_ALT$Alexa488_Chamber1_HOXD13_500nM, Alexa488_signal_df_SNP_ALT$Alexa488_Chamber4_HOXD13_500nM)),
+         pch = 19, col = alpha("red", 1), cex = 2)
+  
+  # Test
+  wilcox.test(log10(c(Alexa488_signal_df_SNP_REF$Alexa488_Chamber1_HOXD13_500nM, Alexa488_signal_df_SNP_REF$Alexa488_Chamber4_HOXD13_500nM)),
+              log10(c(Alexa488_signal_df_SNP_ALT$Alexa488_Chamber1_HOXD13_500nM, Alexa488_signal_df_SNP_ALT$Alexa488_Chamber4_HOXD13_500nM)))
+  t.test(log10(c(Alexa488_signal_df_SNP_REF$Alexa488_Chamber1_HOXD13_500nM, Alexa488_signal_df_SNP_REF$Alexa488_Chamber4_HOXD13_500nM)),
+         log10(c(Alexa488_signal_df_SNP_ALT$Alexa488_Chamber1_HOXD13_500nM, Alexa488_signal_df_SNP_ALT$Alexa488_Chamber4_HOXD13_500nM)))
+}
+
+
+```
+
+
+```{r}
+# Read HOXD13 PBM data
+HOXD13_PBM_Escores <- read.table(paste(paste(Working_dir, "Input_Files/PBM_data_HOXD13", sep = "/"), "HOXD13_REF_R2_8mers_11111111.txt", sep = "/"), header = TRUE)
+
+################################################################# Read HOXD13 8-mer PADIT-seq log2foldchange values for the 3 registers
+Register_1_8 <- read.table(paste(paste(Working_dir, "Output_Files", sep = "/"), "HOXD13_all8mers_1_8_median.txt", sep = "/"), header = TRUE)
+Register_2_9 <- read.table(paste(paste(Working_dir, "Output_Files", sep = "/"), "HOXD13_all8mers_2_9_median.txt", sep = "/"), header = TRUE)
+Register_3_10 <- read.table(paste(paste(Working_dir, "Output_Files", sep = "/"), "HOXD13_all8mers_3_10_median.txt", sep = "/"), header = TRUE)
+
+# Format
+colnames(Register_1_8) <- paste(colnames(Register_1_8), "1_8", sep = "_")
+colnames(Register_2_9) <- paste(colnames(Register_2_9), "2_9", sep = "_")
+colnames(Register_3_10) <- paste(colnames(Register_3_10), "3_10", sep = "_")
+TEMP1 <- merge(Register_1_8, Register_2_9, 
+               by.x = "X8.mer_1_8", by.y = "X8.mer_2_9")
+TEMP2 <- merge(TEMP1, Register_3_10, 
+               by.x = "X8.mer_1_8", by.y = "X8.mer_3_10")
+HOXD13_PBM_Escores_PADIT <- TEMP2; rm(TEMP1); rm(TEMP2)
+
+#
+HOXD13_PBM_Escores_PADIT$padj_1_8[is.na(HOXD13_PBM_Escores_PADIT$padj_1_8)] <- 1
+HOXD13_PBM_Escores_PADIT$padj_2_9[is.na(HOXD13_PBM_Escores_PADIT$padj_2_9)] <- 1
+HOXD13_PBM_Escores_PADIT$padj_3_10[is.na(HOXD13_PBM_Escores_PADIT$padj_3_10)] <- 1
+
+# 
+HOXD13_PBM_Escores_PADIT$Mean_log2FC <- apply(HOXD13_PBM_Escores_PADIT[,c("log2FoldChange_1_8", "log2FoldChange_2_9", "log2FoldChange_3_10")], 1, median)
+HOXD13_PBM_Escores_PADIT$Max_padj <- apply(HOXD13_PBM_Escores_PADIT[,c("padj_1_8", "padj_2_9", "padj_3_10")], 1, median)
+
+# Re-define MPRA activity
+HOXD13_PBM_Escores_PADIT$MPRAactivity <- (HOXD13_PBM_Escores_PADIT$Mean_log2FC > 0 & HOXD13_PBM_Escores_PADIT$Max_padj < 0.05)*1 
+
+# Put both orientations in 1 column
+df1 <- HOXD13_PBM_Escores_PADIT[,c("X8.mer_1_8", "Mean_log2FC", "MPRAactivity")]
+colnames(df1) <- c("TFBS", "log2FoldChange", "MPRAactivity")
+df2 <- HOXD13_PBM_Escores_PADIT[,c("X8.mer.1_1_8", "Mean_log2FC", "MPRAactivity")]
+colnames(df2) <- c("TFBS", "log2FoldChange", "MPRAactivity")
+dds_results_HOXD13_df <- rbind(df1, df2)
+
+# 
+for(i in 1:nrow(SNPs_DF))
+{
+  # Ref
+  Current_DNA_sequence <- SNPs_DF$DNA_REF_trimmed[i]
+  Sequence_9mers_DF <- data.frame()
+  for(j in 1:(nchar(Current_DNA_sequence) - 7))
+  {
+    Sequence_9mers_DF[j, 1] <- substr(Current_DNA_sequence, j, j+7)
+  }
+  dds_results_HOXD13_df_subset_REF <- dds_results_HOXD13_df[which(dds_results_HOXD13_df$TFBS %in% Sequence_9mers_DF$V1),]
+  dds_results_HOXD13_df_subset_REF <- dds_results_HOXD13_df_subset_REF[match(Sequence_9mers_DF$V1, dds_results_HOXD13_df_subset_REF$TFBS),]
+                    
+  # Alt
+  Current_DNA_sequence <- SNPs_DF$DNA_ALT_trimmed[i]
+  Sequence_9mers_DF <- data.frame()
+  for(j in 1:(nchar(Current_DNA_sequence) - 7))
+  {
+    Sequence_9mers_DF[j, 1] <- substr(Current_DNA_sequence, j, j+7)
+  }
+  dds_results_HOXD13_df_subset_ALT <- dds_results_HOXD13_df[which(dds_results_HOXD13_df$TFBS %in% Sequence_9mers_DF$V1),]
+  dds_results_HOXD13_df_subset_ALT <- dds_results_HOXD13_df_subset_ALT[match(Sequence_9mers_DF$V1, dds_results_HOXD13_df_subset_ALT$TFBS),] 
+  
+  # concatenate columns
+  dds_results_HOXD13_df_subset <- cbind(dds_results_HOXD13_df_subset_REF, dds_results_HOXD13_df_subset_ALT)
+  colnames(dds_results_HOXD13_df_subset) <- c(paste(colnames(dds_results_HOXD13_df_subset_REF), "REF", sep = "_"), 
+                                            paste(colnames(dds_results_HOXD13_df_subset_ALT), "ALT", sep = "_"))
+  
+  # PADIT-seq activity of the primary binding site
+  dds_results_HOXD13_df_subset_primary <- dds_results_HOXD13_df_subset[which(dds_results_HOXD13_df_subset$TFBS_REF != dds_results_HOXD13_df_subset$TFBS_ALT),]
+  SNPs_DF$PrimaryBindingSite_activity[i] <- max(c(sum(dds_results_HOXD13_df_subset_primary$log2FoldChange_REF[which(dds_results_HOXD13_df_subset_primary$MPRAactivity_REF == 1)]),
+                                                    sum(dds_results_HOXD13_df_subset_primary$log2FoldChange_ALT[which(dds_results_HOXD13_df_subset_primary$MPRAactivity_ALT == 1)])))
+  
+  # Remove rows containing the SNP
+  dds_results_HOXD13_df_subset <- dds_results_HOXD13_df_subset[which(dds_results_HOXD13_df_subset$TFBS_REF == dds_results_HOXD13_df_subset$TFBS_ALT), ]
+  
+  # Store relevant information
+  if(sum(dds_results_HOXD13_df_subset$MPRAactivity_REF) == 0)
+  {
+    SNPs_DF$SecondaryBindingSite_num[i] <- 0
+    SNPs_DF$SecondaryBindingSite_activity[i] <- 0
+  }
+  if(sum(dds_results_HOXD13_df_subset$MPRAactivity_REF) > 0)
+  {
+    SNPs_DF$SecondaryBindingSite_num[i] <- sum(dds_results_HOXD13_df_subset$MPRAactivity_REF)
+    SNPs_DF$SecondaryBindingSite_activity[i] <- sum(dds_results_HOXD13_df_subset$log2FoldChange_REF[which(dds_results_HOXD13_df_subset$MPRAactivity_REF == 1)])
+  }
+}
+
+```
+
+
+
+
+
+AUROC Analysis (Ref > ALT)
+```{r}
+library(pROC)
+library(tidyverse)
+library(ggplot2)
+
+# First, create the gold standard classifications
+SNPs_DF$true_class <- with(SNPs_DF, case_when(
+  CustomPBM_pvalue > 0.05 ~ "no_change",
+  CustomPBM_Median_Diff > 0 ~ "ref_greater",
+  CustomPBM_Median_Diff < 0 ~ "ref_lesser"
+))
+
+# Calculate ROC curves for 'ref_greater' class
+roc_pbs <- roc(response = SNPs_DF$true_class == "ref_greater", 
+               predictor = SNPs_DF$pbs)
+roc_diff <- roc(response = SNPs_DF$true_class == "ref_greater", 
+                predictor = SNPs_DF$Diff_log2FC)
+
+# Add small random noise to zeros
+set.seed(123456)  # for reproducibility
+alleleEffectSize_mod <- SNPs_DF$alleleEffectSize
+zero_indices <- which(alleleEffectSize_mod == 0)
+alleleEffectSize_mod[zero_indices] <- rnorm(length(zero_indices), 
+                                          mean=0, 
+                                          sd=min(abs(SNPs_DF$alleleEffectSize[SNPs_DF$alleleEffectSize != 0]))/100)
+roc_allele <- roc(response = SNPs_DF$true_class == "ref_greater", 
+                  predictor = alleleEffectSize_mod,
+                  direction = ">")
+
+# Calculate confidence intervals
+ci_pbs <- ci.auc(roc_pbs)
+ci_diff <- ci.auc(roc_diff)
+ci_allele <- ci.auc(roc_allele)
+
+# Use coords to get more points along the curve
+more_thresholds <- seq(min(SNPs_DF$alleleEffectSize), 
+                      max(SNPs_DF$alleleEffectSize), 
+                      length.out = 1000)
+coords_allele <- coords(roc_allele, x = "all", input = "threshold",
+                       ret = c("threshold", "specificity", "sensitivity"))
+
+# Create separate data frames for each curve
+roc_data_pbs <- data.frame(
+  FPR = 1 - roc_pbs$specificities,
+  TPR = roc_pbs$sensitivities,
+  Method = "PBS"
+)
+roc_data_diff <- data.frame(
+  FPR = 1 - roc_diff$specificities,
+  TPR = roc_diff$sensitivities,
+  Method = "Diff_log2FC"
+)
+roc_data_allele <- data.frame(
+  FPR = 1 - coords_allele$specificity,
+  TPR = coords_allele$sensitivity,
+  Method = "AlleleEffectSize"
+)
+
+# Combine the data frames
+roc_data <- rbind(roc_data_pbs, roc_data_diff, roc_data_allele)
+
+# Plot ROC curves
+ggplot(roc_data, aes(x = FPR, y = TPR, color = Method)) +
+  geom_line(size = 1) +
+  geom_abline(slope = 1, intercept = 0, linetype = "dashed", color = "gray") +
+  scale_color_manual(values = c("PBS" = "blue", "Diff_log2FC" = "red", "AlleleEffectSize" = "green")) +
+  labs(x = "False Positive Rate",
+       y = "True Positive Rate",
+       title = "ROC Curves for Reference > Alternative Prediction") +
+  theme_minimal() +
+  annotate("text", x = 0.75, y = 0.25, 
+           label = sprintf("AUC (95%% CI):\nPBS: %.3f (%.3f-%.3f)\nDiff_log2FC: %.3f (%.3f-%.3f)\nAlleleEffectSize: %.3f (%.3f-%.3f)",
+                         auc(roc_pbs), ci_pbs[1], ci_pbs[3],
+                         auc(roc_diff), ci_diff[1], ci_diff[3],
+                         auc(roc_allele), ci_allele[1], ci_allele[3]))
+
+# Plot ROC curves (base R)
+plot(roc_data$FPR[which(roc_data$Method == "PBS")], 
+     roc_data$TPR[which(roc_data$Method == "PBS")],
+     col = "blue", type = 'l', lwd = 2)
+points(roc_data$FPR[which(roc_data$Method == "Diff_log2FC")], 
+     roc_data$TPR[which(roc_data$Method == "Diff_log2FC")],
+     col = "red", type = 'l', lwd = 2)
+points(roc_data$FPR[which(roc_data$Method == "AlleleEffectSize")], 
+     roc_data$TPR[which(roc_data$Method == "AlleleEffectSize")],
+     col = "green", type = 'l', lwd = 2)
+abline(a = 0, b = 1, col = "black")
+
+```
+
+AUROC Analysis (Ref > ALT)
+```{r}
+library(pROC)
+library(tidyverse)
+library(ggplot2)
+
+# First, create the gold standard classifications
+SNPs_DF$true_class <- with(SNPs_DF, case_when(
+  CustomPBM_pvalue > 0.05 ~ "no_change",
+  CustomPBM_Median_Diff > 0 ~ "ref_greater",
+  CustomPBM_Median_Diff < 0 ~ "ref_lesser"
+))
+
+# Calculate ROC curves for 'ref_lesser' class
+roc_pbs <- roc(response = SNPs_DF$true_class == "ref_lesser", 
+               predictor = SNPs_DF$pbs)
+roc_diff <- roc(response = SNPs_DF$true_class == "ref_lesser", 
+                predictor = SNPs_DF$Diff_log2FC)
+
+# Add small random noise to zeros
+set.seed(123456)  # for reproducibility
+alleleEffectSize_mod <- SNPs_DF$alleleEffectSize
+zero_indices <- which(alleleEffectSize_mod == 0)
+alleleEffectSize_mod[zero_indices] <- rnorm(length(zero_indices), 
+                                          mean=0, 
+                                          sd=min(abs(SNPs_DF$alleleEffectSize[SNPs_DF$alleleEffectSize != 0]))/100)
+roc_allele <- roc(response = SNPs_DF$true_class == "ref_lesser", 
+                  predictor = alleleEffectSize_mod,
+                  direction = ">")
+
+# Calculate confidence intervals
+ci_pbs <- ci.auc(roc_pbs)
+ci_diff <- ci.auc(roc_diff)
+ci_allele <- ci.auc(roc_allele)
+
+# Use coords to get more points along the curve
+more_thresholds <- seq(min(SNPs_DF$alleleEffectSize), 
+                      max(SNPs_DF$alleleEffectSize), 
+                      length.out = 1000)
+coords_allele <- coords(roc_allele, x = "all", input = "threshold",
+                       ret = c("threshold", "specificity", "sensitivity"))
+
+# Create separate data frames for each curve
+roc_data_pbs <- data.frame(
+  FPR = 1 - roc_pbs$specificities,
+  TPR = roc_pbs$sensitivities,
+  Method = "PBS"
+)
+roc_data_diff <- data.frame(
+  FPR = 1 - roc_diff$specificities,
+  TPR = roc_diff$sensitivities,
+  Method = "Diff_log2FC"
+)
+roc_data_allele <- data.frame(
+  FPR = 1 - coords_allele$specificity,
+  TPR = coords_allele$sensitivity,
+  Method = "AlleleEffectSize"
+)
+
+# Combine the data frames
+roc_data <- rbind(roc_data_pbs, roc_data_diff, roc_data_allele)
+
+# Plot ROC curves
+ggplot(roc_data, aes(x = FPR, y = TPR, color = Method)) +
+  geom_line(size = 1) +
+  geom_abline(slope = 1, intercept = 0, linetype = "dashed", color = "gray") +
+  scale_color_manual(values = c("PBS" = "blue", "Diff_log2FC" = "red", "AlleleEffectSize" = "green")) +
+  labs(x = "False Positive Rate",
+       y = "True Positive Rate",
+       title = "ROC Curves for Reference > Alternative Prediction") +
+  theme_minimal() +
+  annotate("text", x = 0.75, y = 0.25, 
+           label = sprintf("AUC (95%% CI):\nPBS: %.3f (%.3f-%.3f)\nDiff_log2FC: %.3f (%.3f-%.3f)\nAlleleEffectSize: %.3f (%.3f-%.3f)",
+                         auc(roc_pbs), ci_pbs[1], ci_pbs[3],
+                         auc(roc_diff), ci_diff[1], ci_diff[3],
+                         auc(roc_allele), ci_allele[1], ci_allele[3]))
+
+# Plot ROC curves (base R)
+plot(roc_data$FPR[which(roc_data$Method == "PBS")], 
+     roc_data$TPR[which(roc_data$Method == "PBS")],
+     col = "blue", type = 'l', lwd = 2)
+points(roc_data$FPR[which(roc_data$Method == "Diff_log2FC")], 
+     roc_data$TPR[which(roc_data$Method == "Diff_log2FC")],
+     col = "red", type = 'l', lwd = 2)
+points(roc_data$FPR[which(roc_data$Method == "AlleleEffectSize")], 
+     roc_data$TPR[which(roc_data$Method == "AlleleEffectSize")],
+     col = "green", type = 'l', lwd = 2)
+abline(a = 0, b = 1, col = "black")
+
+```
+
+
+
+
+
+

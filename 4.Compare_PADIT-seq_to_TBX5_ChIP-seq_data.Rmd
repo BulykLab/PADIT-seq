@@ -1,0 +1,486 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+# Set Global Variables here
+
+```{r}
+# Please change the working directory
+Working_dir <- "~/Desktop/AVATAR/PADIT-seq-Manuscript/Code_Availability_Revision/"
+
+# Please be sure to install these libraries
+library(pheatmap); library(ggplot2); library(DESeq2); library(ggrepel); library("stringr"); library(viridis)
+
+# FDR cutoff (do not change)
+Cutoff_Value <- 0.05
+
+```
+
+
+# Important functions
+```{r}
+######################################################### Longest stretch of 1's
+Longest_1s <- function(vec) {
+  
+  # replace NA by 0
+  vec[is.na(vec)] <- 0
+  
+  # Ensure that the vector contains only 0s and 1s
+  if (!all(vec %in% c(0, 1))) {
+    stop("The vector should contain only 0s and 1s")
+  }
+
+  # Use rle to compute the lengths of sequences of 1s and 0s
+  runs <- rle(vec)
+
+  # Extract the lengths of sequences of 1s only
+  lengths_of_ones <- runs$lengths[runs$values == 1]
+
+  # If there are no sequences of 1s, return a maximum length of 0 and start position as NA
+  if (length(lengths_of_ones) == 0) {
+    return(list(max_length = 0, start_position = NA))
+  }
+
+  # Identify the maximum length of the 1s sequences
+  max_length <- max(lengths_of_ones)
+
+  # Find the position (index) where the maximum stretch of 1s begins
+  start_positions_of_ones <- cumsum(runs$lengths) - runs$lengths + 1
+  start_position <- start_positions_of_ones[which(runs$lengths == max_length & runs$values == 1)[1]]
+
+  # Return the maximum length and start position as a list
+  return(list(max_length = max_length, start_position = start_position))
+}
+
+# Example usage:
+vec <- c(1, 1, 0, 1, 1, 1, 0, 0, 1, 1, 0, 1)
+result <- Longest_1s(vec)
+print(paste("Max length:", result$max_length, "| Start position:", result$start_position))
+
+######################################################### Plot heatmap
+plot_Heatmap <- function(Heatmap_DF_log2FC_rd_subset_subset, size)
+{
+  Heatmap_DF_log2FC_rd_subset_subset <- Heatmap_DF_log2FC_rd_subset_subset[which(apply(Heatmap_DF_log2FC_rd_subset_subset, 1, min) > -10), ]
+  sub_mat <- Heatmap_DF_log2FC_rd_subset_subset[, 5:(ncol(Heatmap_DF_log2FC_rd_subset_subset)-4)]
+  Heatmap_DF_log2FC_rd_subset_subset <- Heatmap_DF_log2FC_rd_subset_subset[order(apply(sub_mat, 1, sum), decreasing = TRUE), ]
+  pheatmap(Heatmap_DF_log2FC_rd_subset_subset, 
+         cluster_cols = FALSE, cluster_rows = FALSE, 
+         show_rownames = FALSE, show_colnames =  FALSE, scale = "none", 
+         color = inferno(100),
+         main = paste(size, "bps", sep = " ")) 
+}
+```
+
+
+
+# Read TBX5 8-mer PADIT-seq log2foldchange values for the 3 registers
+```{r}
+# Read TBX5 PBM data
+TBX5_PBM_Escores <- read.table(paste(paste(Working_dir, "Input_Files/PBM_data_TBX5", sep = "/"), "Tbx5_8mers_11111111.txt", sep = "/"), header = TRUE)
+
+################################################################# Read TBX5 8-mer PADIT-seq log2foldchange values for the 3 registers
+Register_1_8 <- read.table(paste(paste(Working_dir, "Output_Files/Median_kmer_log2FC", sep = "/"), "TBX5_all8mers_1_8_median.txt", sep = "/"), header = TRUE)
+Register_2_9 <- read.table(paste(paste(Working_dir, "Output_Files/Median_kmer_log2FC", sep = "/"), "TBX5_all8mers_2_9_median.txt", sep = "/"), header = TRUE)
+Register_3_10 <- read.table(paste(paste(Working_dir, "Output_Files/Median_kmer_log2FC", sep = "/"), "TBX5_all8mers_3_10_median.txt", sep = "/"), header = TRUE)
+
+# Re-define MPRAactivity
+Register_1_8$MPRAactivity <- (Register_1_8$log2FoldChange > 0 & Register_1_8$padj < Cutoff_Value)*1
+Register_2_9$MPRAactivity <- (Register_2_9$log2FoldChange > 0 & Register_2_9$padj < Cutoff_Value)*1
+Register_3_10$MPRAactivity <- (Register_3_10$log2FoldChange > 0 & Register_3_10$padj < Cutoff_Value)*1
+
+# Number of red points?
+table(Register_1_8$MPRAactivity)
+table(Register_2_9$MPRAactivity)
+table(Register_3_10$MPRAactivity)
+
+# Format
+colnames(Register_1_8) <- paste(colnames(Register_1_8), "1_8", sep = "_")
+colnames(Register_2_9) <- paste(colnames(Register_2_9), "2_9", sep = "_")
+colnames(Register_3_10) <- paste(colnames(Register_3_10), "3_10", sep = "_")
+TEMP1 <- merge(Register_1_8, Register_2_9,
+               by.x = "X8.mer_1_8", by.y = "X8.mer_2_9")
+TEMP2 <- merge(TEMP1, Register_3_10,
+               by.x = "X8.mer_1_8", by.y = "X8.mer_3_10")
+TBX5_PBM_Escores_PADIT <- TEMP2; rm(TEMP1); rm(TEMP2)
+
+# Define Median values
+TBX5_PBM_Escores_PADIT$Median_baseMean <- apply(TBX5_PBM_Escores_PADIT[,c("baseMean_1_8", "baseMean_2_9", "baseMean_3_10")], 1, median)
+TBX5_PBM_Escores_PADIT$Mean_log2FC <- apply(TBX5_PBM_Escores_PADIT[,c("log2FoldChange_1_8", "log2FoldChange_2_9", "log2FoldChange_3_10")], 1, median)
+TBX5_PBM_Escores_PADIT$padj <- apply(TBX5_PBM_Escores_PADIT[,c("padj_1_8", "padj_2_9", "padj_3_10")], 1, median)
+TBX5_PBM_Escores_PADIT$MPRAactivity <- apply(TBX5_PBM_Escores_PADIT[,c("MPRAactivity_1_8", "MPRAactivity_2_9", "MPRAactivity_3_10")], 1, median)
+
+# Add PBM E-scores and Z-scores
+TEMP <- merge(TBX5_PBM_Escores, TBX5_PBM_Escores_PADIT, 
+              by.x = "X8.mer", by.y = "X8.mer_1_8")
+TBX5_PBM_Escores_PADIT <- TEMP; rm(TEMP)
+
+#
+df1 <- TBX5_PBM_Escores_PADIT[,c("X8.mer", "Median_baseMean", "Mean_log2FC", "padj", "MPRAactivity")]
+colnames(df1) <- c("TFBS", "baseMean", "log2FoldChange", "padj", "MPRAactivity")
+df2 <- TBX5_PBM_Escores_PADIT[,c("X8.mer.1", "Median_baseMean", "Mean_log2FC", "padj", "MPRAactivity")]
+colnames(df2) <- c("TFBS", "baseMean", "log2FoldChange", "padj", "MPRAactivity")
+dds_results_TBX5_df <- rbind(df1, df2)
+```
+
+
+# Tile PADIT-seq TBX5 8-mers on ChIP-seq peaks
+```{r}
+######################################################### Actual ChIP-seq peaks
+# Read TBX5 CHIP-seq DNA sequences
+TBX5_CHIP <- read.table(paste(paste(Working_dir, "Input_Files/ChIP-seq_data_TBX5", sep = "/"), "GSE85628.TBX5.cardiomyocyte.bed.fa.txt", sep = "/"), header = FALSE)
+colnames(TBX5_CHIP) <- c("V1")
+
+# Obtain tiling
+numPeaks <- nrow(TBX5_CHIP)
+Heatmap_DF_log2FC <- list()
+Heatmap_DF_MPRAactivity <- list()
+for(i in 1:numPeaks)
+{
+  CurrentPeak <- toupper(TBX5_CHIP$V1[i])
+  Sequence_10mers_DF <- data.frame()
+  for(j in 1:(nchar(CurrentPeak)-7))
+  {
+    Sequence_10mers_DF[j, 1] <- substr(CurrentPeak, j, j+7)
+  }
+  dds_results_TBX5_df_subset <- dds_results_TBX5_df[which(dds_results_TBX5_df$TFBS %in% Sequence_10mers_DF$V1),]
+  dds_results_TBX5_df_subset <- dds_results_TBX5_df_subset[match(Sequence_10mers_DF$V1, dds_results_TBX5_df_subset$TFBS),]
+  Heatmap_DF_log2FC <- c(Heatmap_DF_log2FC, list(dds_results_TBX5_df_subset$log2FoldChange))
+  Heatmap_DF_MPRAactivity <- c(Heatmap_DF_MPRAactivity, list(dds_results_TBX5_df_subset$MPRAactivity))
+}
+
+# Write
+saveRDS(Heatmap_DF_log2FC, file=paste(paste(Working_dir, "Output_Files", sep = "/"), "log2FC_8bpstiling_TBX5_peaks_FDR_0.05.RData", sep = "/"))
+saveRDS(Heatmap_DF_MPRAactivity, file=paste(paste(Working_dir, "Output_Files", sep = "/"), "MPRAactivity_8bpstiling_TBX5_peaks_FDR_0.05.RData", sep = "/"))
+rm(TBX5_CHIP)
+
+```
+
+
+
+# Tile PADIT-seq k-mers on background sequences from Homer
+```{r}
+# Read TBX5 CHIP-seq DNA sequences
+TBX5_CHIP_OG <- read.table(paste(paste(Working_dir, "Input_Files/ChIP-seq_data_TBX5", sep = "/"), "GSE85628.TBX5.cardiomyocyte.bed.fa.txt", sep = "/"), header = FALSE)
+
+# Read TBX5 CHIP-seq DNA sequences
+TBX5_CHIP <- read.table(paste(paste(Working_dir, "Input_Files/ChIP-seq_data_TBX5", sep = "/"), "seq.tsv", sep = "/"), header = FALSE)
+TBX5_CHIP <- TBX5_CHIP[which(! TBX5_CHIP$V2 %in% TBX5_CHIP_OG$V1),]
+TBX5_CHIP <- TBX5_CHIP[which(TBX5_CHIP$V1 %in% c(paste(1:nrow(TBX5_CHIP_OG), "local+1", sep = "-")) ), ]
+colnames(TBX5_CHIP) <- c("V2", "V1")
+
+# Obtain tiling
+numPeaks <- nrow(TBX5_CHIP)
+Heatmap_DF_log2FC <- list()
+Heatmap_DF_MPRAactivity <- list()
+for(i in 1:numPeaks)
+{
+  CurrentPeak <- toupper(TBX5_CHIP$V1[i])
+  Sequence_10mers_DF <- data.frame()
+  for(j in 1:(nchar(CurrentPeak)-7))
+  {
+    Sequence_10mers_DF[j, 1] <- substr(CurrentPeak, j, j+7)
+  }
+  dds_results_TBX5_df_subset <- dds_results_TBX5_df[which(dds_results_TBX5_df$TFBS %in% Sequence_10mers_DF$V1),]
+  dds_results_TBX5_df_subset <- dds_results_TBX5_df_subset[match(Sequence_10mers_DF$V1, dds_results_TBX5_df_subset$TFBS),]
+  Heatmap_DF_log2FC <- c(Heatmap_DF_log2FC, list(dds_results_TBX5_df_subset$log2FoldChange))
+  Heatmap_DF_MPRAactivity <- c(Heatmap_DF_MPRAactivity, list(dds_results_TBX5_df_subset$MPRAactivity))
+}
+
+# Write
+saveRDS(Heatmap_DF_log2FC, file=paste(paste(Working_dir, "Output_Files", sep = "/"), "log2FC_8bpstiling_TBX5_peaks_HomerBG_FDR_0.05.RData", sep = "/"))
+saveRDS(Heatmap_DF_MPRAactivity, file=paste(paste(Working_dir, "Output_Files", sep = "/"), "MPRAactivity_8bpstiling_TBX5_peaks_HomerBG_FDR_0.05.RData", sep = "/"))
+rm(TBX5_CHIP)
+
+```
+
+
+
+# Tile PADIT-seq TBX5 8-mers on shuffled peaks (bedtools)
+```{r}
+# Read TBX5 CHIP-seq DNA sequences
+TBX5_CHIP <- read.table(paste(paste(Working_dir, "Input_Files/ChIP-seq_data_TBX5", sep = "/"), "GSE85628.TBX5.cardiomyocyte.shuffled1.bed.fa.txt", sep = "/"), header = FALSE)
+colnames(TBX5_CHIP) <- c("V1")
+
+# Obtain tiling
+numPeaks <- nrow(TBX5_CHIP)
+Heatmap_DF_log2FC <- list()
+Heatmap_DF_MPRAactivity <- list()
+for(i in 1:numPeaks)
+{
+  CurrentPeak <- toupper(TBX5_CHIP$V1[i])
+  Sequence_10mers_DF <- data.frame()
+  for(j in 1:(nchar(CurrentPeak)-7))
+  {
+    Sequence_10mers_DF[j, 1] <- substr(CurrentPeak, j, j+7)
+  }
+  dds_results_TBX5_df_subset <- dds_results_TBX5_df[which(dds_results_TBX5_df$TFBS %in% Sequence_10mers_DF$V1),]
+  dds_results_TBX5_df_subset <- dds_results_TBX5_df_subset[match(Sequence_10mers_DF$V1, dds_results_TBX5_df_subset$TFBS),]
+  Heatmap_DF_log2FC <- c(Heatmap_DF_log2FC, list(dds_results_TBX5_df_subset$log2FoldChange))
+  Heatmap_DF_MPRAactivity <- c(Heatmap_DF_MPRAactivity, list(dds_results_TBX5_df_subset$MPRAactivity))
+}
+
+# Write
+saveRDS(Heatmap_DF_log2FC, file=paste(paste(Working_dir, "Output_Files", sep = "/"), "log2FC_8bpstiling_TBX5_peaks.shuffled1_FDR_0.05.RData", sep = "/"))
+saveRDS(Heatmap_DF_MPRAactivity, file=paste(paste(Working_dir, "Output_Files", sep = "/"), "MPRAactivity_8bpstiling_TBX5_peaks.shuffled1_FDR_0.05.RData", sep = "/"))
+rm(TBX5_CHIP)
+```
+
+
+# Tile PADIT-seq TBX5 8-mers on shuffled peaks (bedtools)
+```{r}
+# Read TBX5 CHIP-seq DNA sequences
+TBX5_CHIP <- read.table(paste(paste(Working_dir, "Input_Files/ChIP-seq_data_TBX5", sep = "/"), "GSE85628.TBX5.cardiomyocyte.shuffled2.bed.fa.txt", sep = "/"), header = FALSE)
+colnames(TBX5_CHIP) <- c("V1")
+
+# Obtain tiling
+numPeaks <- nrow(TBX5_CHIP)
+Heatmap_DF_log2FC <- list()
+Heatmap_DF_MPRAactivity <- list()
+for(i in 1:numPeaks)
+{
+  CurrentPeak <- toupper(TBX5_CHIP$V1[i])
+  Sequence_10mers_DF <- data.frame()
+  for(j in 1:(nchar(CurrentPeak)-7))
+  {
+    Sequence_10mers_DF[j, 1] <- substr(CurrentPeak, j, j+7)
+  }
+  dds_results_TBX5_df_subset <- dds_results_TBX5_df[which(dds_results_TBX5_df$TFBS %in% Sequence_10mers_DF$V1),]
+  dds_results_TBX5_df_subset <- dds_results_TBX5_df_subset[match(Sequence_10mers_DF$V1, dds_results_TBX5_df_subset$TFBS),]
+  Heatmap_DF_log2FC <- c(Heatmap_DF_log2FC, list(dds_results_TBX5_df_subset$log2FoldChange))
+  Heatmap_DF_MPRAactivity <- c(Heatmap_DF_MPRAactivity, list(dds_results_TBX5_df_subset$MPRAactivity))
+}
+
+# Write
+saveRDS(Heatmap_DF_log2FC, file=paste(paste(Working_dir, "Output_Files", sep = "/"), "log2FC_8bpstiling_TBX5_peaks.shuffled2_FDR_0.05.RData", sep = "/"))
+saveRDS(Heatmap_DF_MPRAactivity, file=paste(paste(Working_dir, "Output_Files", sep = "/"), "MPRAactivity_8bpstiling_TBX5_peaks.shuffled2_FDR_0.05.RData", sep = "/"))
+rm(TBX5_CHIP)
+```
+
+
+# TBX5 ChIP-seq peaks contain longer stretches of consecutively active TBX5 8-mers
+```{r}
+# Read log2FC tiling
+log2FC_peaks <- readRDS(paste(paste(Working_dir, "Output_Files", sep = "/"), "log2FC_8bpstiling_TBX5_peaks_FDR_0.05.RData", sep = "/"))
+log2FC_HomerBG <- readRDS(paste(paste(Working_dir, "Output_Files", sep = "/"), "log2FC_8bpstiling_TBX5_peaks_HomerBG_FDR_0.05.RData", sep = "/"))
+log2FC_Shuffled1 <- readRDS(paste(paste(Working_dir, "Output_Files", sep = "/"), "log2FC_8bpstiling_TBX5_peaks.shuffled1_FDR_0.05.RData", sep = "/"))
+log2FC_Shuffled2 <- readRDS(paste(paste(Working_dir, "Output_Files", sep = "/"), "log2FC_8bpstiling_TBX5_peaks.shuffled2_FDR_0.05.RData", sep = "/"))
+
+# Read MPRAactivity tiling
+MPRAactivity_peaks <- readRDS(paste(paste(Working_dir, "Output_Files", sep = "/"), "MPRAactivity_8bpstiling_TBX5_peaks_FDR_0.05.RData", sep = "/"))
+MPRAactivity_HomerBG <- readRDS(paste(paste(Working_dir, "Output_Files", sep = "/"), "MPRAactivity_8bpstiling_TBX5_peaks_HomerBG_FDR_0.05.RData", sep = "/"))
+MPRAactivity_HomerBG <- rapply(MPRAactivity_HomerBG, f=function(x) ifelse(is.na(x),0,x), how="replace" )
+MPRAactivity_Shuffled1 <- readRDS(paste(paste(Working_dir, "Output_Files", sep = "/"), "MPRAactivity_8bpstiling_TBX5_peaks.shuffled1_FDR_0.05.RData", sep = "/"))
+MPRAactivity_Shuffled2 <- readRDS(paste(paste(Working_dir, "Output_Files", sep = "/"), "MPRAactivity_8bpstiling_TBX5_peaks.shuffled2_FDR_0.05.RData", sep = "/"))
+
+######################################################### Longest 1's
+# Longest 1's per peak
+longest1s_perPeak <- sapply(MPRAactivity_peaks, function(col) Longest_1s(col)$max_length)
+longest1s_perPeak_Shuffled_random <- sapply(MPRAactivity_HomerBG, function(col) Longest_1s(col)$max_length)
+longest1s_perPeak_Shuffled_random1 <- sapply(MPRAactivity_Shuffled1, function(col) Longest_1s(col)$max_length)
+longest1s_perPeak_Shuffled_random2 <- sapply(MPRAactivity_Shuffled2, function(col) Longest_1s(col)$max_length)
+
+# Longest 1's per peak
+# longest1s_perPeak <- (longest1s_perPeak+7)*((longest1s_perPeak != 0)*1)
+# longest1s_perPeak_Shuffled_random <- (longest1s_perPeak_Shuffled_random+7)*((longest1s_perPeak_Shuffled_random != 0)*1)
+# longest1s_perPeak_Shuffled_random2 <- (longest1s_perPeak_Shuffled_random2+7)*((longest1s_perPeak_Shuffled_random != 0)*1)
+
+# Histogram (longest 1's of MPRAactivity) 
+hist(longest1s_perPeak_Shuffled_random, breaks = 20, prob = FALSE, col = "black", ylim = c(0, 6000),
+     xlim = c(0, 10), xlab = "Number of 8-mers with PADIT-seq activity", 
+     main = "Background = Local")
+hist(longest1s_perPeak, breaks = 40, prob = FALSE, col = "red",
+     xlim = c(0, 10), add = TRUE)
+
+# Histogram (longest 1's of MPRAactivity) 
+hist(longest1s_perPeak_Shuffled_random1, breaks = 20, prob = FALSE, col = "black", ylim = c(0, 6000),
+     xlim = c(0, 10), xlab = "Number of 8-mers with PADIT-seq activity", 
+     main = "Background = Random length-matched genomic interval")
+hist(longest1s_perPeak, breaks = 40, prob = FALSE, col = "red",
+     xlim = c(0, 10), add = TRUE)
+
+# 
+table(longest1s_perPeak > 5)
+
+# Wilcoxon test
+wilcox.test(longest1s_perPeak, longest1s_perPeak_Shuffled_random)
+wilcox.test(longest1s_perPeak, longest1s_perPeak_Shuffled_random1)
+wilcox.test(longest1s_perPeak, longest1s_perPeak_Shuffled_random2)
+wilcox.test(longest1s_perPeak_Shuffled_random, longest1s_perPeak_Shuffled_random1)
+wilcox.test(longest1s_perPeak_Shuffled_random1, longest1s_perPeak_Shuffled_random2)
+
+```
+
+
+
+# Function that encapsulates the logic for processing each peak and creating the corresponding data frame
+```{r}
+process_peak <- function(peak_data, dds_results_TBX5_df, max_length) {
+  CurrentPeak <- toupper(peak_data$DNA)
+  Sequence_10mers_DF <- data.frame(V1 = substring(CurrentPeak, 1:(nchar(CurrentPeak)-7), 8:nchar(CurrentPeak)))
+  
+  dds_results_TBX5_df_subset <- dds_results_TBX5_df[dds_results_TBX5_df$TFBS %in% Sequence_10mers_DF$V1, ]
+  dds_results_TBX5_df_subset <- dds_results_TBX5_df_subset[match(Sequence_10mers_DF$V1, dds_results_TBX5_df_subset$TFBS), ]
+  
+  Longest_1s_results <- Longest_1s(dds_results_TBX5_df_subset$MPRAactivity)
+  
+  if(Longest_1s_results$max_length == max_length && 
+     Longest_1s_results$start_position > 4 && 
+     (Longest_1s_results$start_position + max_length + 10) < nrow(dds_results_TBX5_df_subset)) {
+    
+    log2FC <- dds_results_TBX5_df_subset$log2FoldChange[
+      (Longest_1s_results$start_position-4):(Longest_1s_results$start_position+max_length+3)
+    ]
+    
+    result <- c(
+      peak_data$chr,
+      peak_data$start + (Longest_1s_results$start_position - 3) - 1,
+      peak_data$start + (Longest_1s_results$start_position + max_length + 6),
+      substr(peak_data$DNA, 
+             (Longest_1s_results$start_position-4), 
+             (Longest_1s_results$start_position+max_length+10)),
+      as.numeric(log2FC)
+    )
+    
+    return(result)
+  }
+  
+  return(NULL)
+}
+
+```
+
+
+
+# Heatmap of consecutively active 8-mers 
+```{r}
+# Read ChIP-seq peaks with DNA sequence
+TBX5_CHIP <- read.table(paste(paste(Working_dir, "Input_Files/ChIP-seq_data_TBX5", sep = "/"), "GSE85628.TBX5.cardiomyocyte.bed.fa2.0.txt", sep = "/"))
+TBX5_CHIP <- TBX5_CHIP[complete.cases(TBX5_CHIP), ]
+colnames(TBX5_CHIP) <- c("chr", "start", "end", "DNA")
+
+# Initialize lists to store results
+results_list <- list(DF3 = list(), DF4 = list(), DF5 = list())
+
+# Process each peak
+for(i in 1:nrow(TBX5_CHIP)) {
+  for(max_length in 3:5) {
+    result <- process_peak(TBX5_CHIP[i, ], dds_results_TBX5_df, max_length)
+    if (!is.null(result)) {
+      results_list[[paste0("DF", max_length)]][[length(results_list[[paste0("DF", max_length)]]) + 1]] <- result
+    }
+  }
+}
+
+# Convert lists to data frames
+for(max_length in 3:5) {
+  df_name <- paste0("DF", max_length)
+  if(length(results_list[[df_name]]) > 0) {
+    df <- do.call(rbind, results_list[[df_name]])
+    df <- as.data.frame(df, stringsAsFactors = FALSE)
+    
+    # Determine the number of columns
+    num_cols <- ncol(df)
+    
+    # Assign column names
+    colnames(df) <- c("chr", "start", "end", "DNA", paste0("V", 5:num_cols))
+    
+    # Convert numeric columns
+    for(i in 5:num_cols) {
+      df[,i] <- as.numeric(df[,i])
+    }
+    
+    # Assign the data frame to the global environment
+    assign(df_name, df, envir = .GlobalEnv)
+  } else {
+    # If no results, create an empty data frame
+    assign(df_name, data.frame(), envir = .GlobalEnv)
+    message(paste("No results for", df_name))
+  }
+}
+
+######################################################### Plot heatmaps
+# Heatmap (log2FC) 3 consecutive
+plot_Heatmap(data.matrix(DF3[, 5:ncol(DF3)]), "10")
+
+# Heatmap (log2FC) 4 consecutive
+plot_Heatmap(data.matrix(DF4[, 5:ncol(DF4)]), "11")
+
+# Heatmap (log2FC) 5 consecutive
+plot_Heatmap(data.matrix(DF5[, 5:ncol(DF5)]), "12")
+
+######################################################### Plot average across positions
+# 3 consecutive
+plot(1:ncol(DF3[, 5:ncol(DF3)]), 
+     apply(DF3[, 5:ncol(DF3)], 2, mean), 
+     pch = 19, type = "b", cex = 4, 
+     col = c(rep("black", times = 4), rep("red", times = 3), rep("black", times = 4)))
+
+# 4 consecutive
+plot(1:ncol(DF4[, 5:ncol(DF4)]), 
+     apply(DF4[, 5:ncol(DF4)], 2, mean), 
+     pch = 19, type = "b", cex = 4, 
+     col = c(rep("black", times = 4), rep("red", times = 4), rep("black", times = 4)))
+
+# 5 consecutive
+plot(1:ncol(DF5[, 5:ncol(DF5)]), 
+     apply(DF5[, 5:ncol(DF5)], 2, mean), 
+     pch = 19, type = "b", cex = 4, 
+     col = c(rep("black", times = 4), rep("red", times = 5), rep("black", times = 4)))
+
+######################################################### Write files to map PhastCons conservation scores
+write.table(DF3, file = paste(paste(Working_dir, "Output_Files", sep = "/"), "GSE85628.TBX5.cardiomyocyte.bed.fa2.0_3consecutive8mers_and4bpsFlank_log2FC.bed", sep = "/"), col.names = FALSE, row.names = FALSE, quote = FALSE, sep = "\t")
+write.table(DF4, file = paste(paste(Working_dir, "Output_Files", sep = "/"), "GSE85628.TBX5.cardiomyocyte.bed.fa2.0_4consecutive8mers_and4bpsFlank_log2FC.bed", sep = "/"), col.names = FALSE, row.names = FALSE, quote = FALSE, sep = "\t")
+write.table(DF5, file = paste(paste(Working_dir, "Output_Files", sep = "/"), "GSE85628.TBX5.cardiomyocyte.bed.fa2.0_5consecutive8mers_and4bpsFlank_log2FC.bed", sep = "/"), col.names = FALSE, row.names = FALSE, quote = FALSE, sep = "\t")
+
+```
+
+
+
+# Generate logos
+```{r}
+library(seqLogo)
+
+# Function to generate PWM logo for any specified k-mers
+Generate_PWM_seqlogo <- function(kmers_vec, kmer_length = 8)
+{
+  # Generate data frame for seqlogo
+  kmers_vec_df <- data.frame()
+  for(i in 1:kmer_length)
+  {
+    letter_i <- substr(kmers_vec, i, i)
+    count <- 0
+    for(j in c("A", "C", "G", "T"))
+    {
+      count <- count + 1
+      kmers_vec_df[i, count] <- sum(letter_i == j)
+    }
+  }
+  colnames(kmers_vec_df) <- c("A", "C", "G", "T")
+  
+  #define function that divides the frequency by the row sum i.e. proportions
+  proportion <- function(x){
+     rs <- sum(x);
+     return(x / rs);
+  }
+   
+  #create position weight matrix
+  TBX5_seqlogo <- apply(kmers_vec_df, 1, proportion)
+  TBX5_seqlogo <- makePWM(TBX5_seqlogo)
+  seqLogo(TBX5_seqlogo)
+}
+
+#
+DF3 <- read.table(paste(paste(Working_dir, "Output_Files", sep = "/"), "GSE85628.TBX5.cardiomyocyte.bed.fa2.0_3consecutive8mers_and4bpsFlank_log2FC.bed", sep = "/"), header = FALSE)
+Generate_PWM_seqlogo(substr(DF3$V4, 2, 17), 16)
+
+#
+DF4 <- read.table(paste(paste(Working_dir, "Output_Files", sep = "/"), "GSE85628.TBX5.cardiomyocyte.bed.fa2.0_4consecutive8mers_and4bpsFlank_log2FC.bed", sep = "/"), header = FALSE)
+Generate_PWM_seqlogo(substr(DF4$V4, 2, 18), 17)
+
+#
+DF5 <- read.table(paste(paste(Working_dir, "Output_Files", sep = "/"), "GSE85628.TBX5.cardiomyocyte.bed.fa2.0_5consecutive8mers_and4bpsFlank_log2FC.bed", sep = "/"), header = FALSE)
+Generate_PWM_seqlogo(substr(DF5$V4, 2, 19), 18)
+
+
+```
+

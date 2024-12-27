@@ -1,0 +1,497 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+# Set Global Variables here
+
+```{r}
+# Please change the working directory
+Working_dir <- "~/Desktop/AVATAR/PADIT-seq-Manuscript/Code_Availability_Revision/"
+
+# Please be sure to install these libraries
+library(pheatmap); library(ggplot2); library(DESeq2); library(ggrepel); library("stringr"); library(viridis)
+
+# FDR cutoff (do not change)
+Cutoff_Value <- 0.05
+
+```
+
+
+# Important functions
+```{r}
+Longest_1s <- function(vec) {
+  # Ensure that the vector contains only 0s and 1s
+  if (!all(vec %in% c(0, 1))) {
+    stop("The vector should contain only 0s and 1s")
+  }
+  
+  # Use rle to compute the lengths of sequences of 1s and 0s
+  runs <- rle(vec)
+  
+  # Extract the lengths of sequences of 1s only
+  lengths_of_ones <- runs$lengths[runs$values == 1]
+  
+  # If there are no sequences of 1s, return both highest and second highest as 0, and position as NA
+  if (length(lengths_of_ones) == 0) {
+    return(list(highest = 0, second_highest = 0, highest_position = NA))
+  }
+  
+  # If there's only one sequence of 1s, return it as highest, 0 as second highest, and calculate its position
+  if (length(lengths_of_ones) == 1) {
+    position <- which(runs$values == 1)
+    start_position <- sum(runs$lengths[1:position]) - runs$lengths[position] + 1
+    return(list(highest = lengths_of_ones[1], second_highest = 0, highest_position = start_position))
+  }
+  
+  # Find the index of the highest run
+  highest_index <- which.max(lengths_of_ones)
+  
+  # Calculate the position of the highest run
+  position <- which(runs$values == 1)[highest_index]
+  start_position <- sum(runs$lengths[1:position]) - runs$lengths[position] + 1
+  
+  # Sort the lengths in descending order
+  sorted_lengths <- sort(lengths_of_ones, decreasing = TRUE)
+  
+  # Return the highest and second highest lengths, and the position of the highest
+  return(list(highest = sorted_lengths[1], 
+              second_highest = sorted_lengths[2], 
+              highest_position = start_position))
+}
+
+# Example usage:
+vec <- c(1, 1, 0, 1, 1, 1, 0, 0, 1, 1, 0, 1)
+result <- Longest_1s(vec)
+print(paste("Highest run of 1's:", result$highest, 
+            "| Second highest run of 1's:", result$second_highest,
+            "| Position of highest run:", result$highest_position))
+
+######################################################### 
+```
+
+
+
+######### Read PBM and PADIT-seq data
+```{r}
+# Read PHO4 PBM data
+PHO4_PBM_Escores_v1 <- read.table(paste(paste(Working_dir, "Input_Files/PBM_data_PHO4", sep = "/"), "Pho4_Zhu_v1_8mers_11111111.txt", sep = "/"), header = TRUE)
+PHO4_PBM_Escores_v2 <- read.table(paste(paste(Working_dir, "Input_Files/PBM_data_PHO4", sep = "/"), "Pho4_Zhu_v2_8mers_11111111.txt", sep = "/"), header = TRUE)
+PHO4_PBM_Escores_TEMP <- merge(PHO4_PBM_Escores_v1, PHO4_PBM_Escores_v2, by = "X8.mer")
+PHO4_PBM_Escores_TEMP$E.score <- apply(PHO4_PBM_Escores_TEMP[, c("E.score.x", "E.score.y")], 1, median)
+PHO4_PBM_Escores_TEMP$Z.score <- apply(PHO4_PBM_Escores_TEMP[, c("Z.score.x", "Z.score.y")], 1, median)
+PHO4_PBM_Escores <- PHO4_PBM_Escores_TEMP[, c("X8.mer", "X8.mer.1.x", "E.score", "Z.score")]; rm(PHO4_PBM_Escores_TEMP)
+colnames(PHO4_PBM_Escores) <- c("X8.mer", "X8.mer.1", "E.score", "Z.score")
+
+# Read PHO4 8-mer PADIT-seq log2foldchange values for the 3 registers
+Register_1_8 <- read.table(paste(paste(Working_dir, "Output_Files/Median_kmer_log2FC", sep = "/"), "PHO4_all8mers_1_8_median.txt", sep = "/"), header = TRUE)
+Register_2_9 <- read.table(paste(paste(Working_dir, "Output_Files/Median_kmer_log2FC", sep = "/"), "PHO4_all8mers_2_9_median.txt", sep = "/"), header = TRUE)
+Register_3_10 <- read.table(paste(paste(Working_dir, "Output_Files/Median_kmer_log2FC", sep = "/"), "PHO4_all8mers_3_10_median.txt", sep = "/"), header = TRUE)
+
+# Re-define MPRAactivity
+Register_1_8$MPRAactivity <- (Register_1_8$log2FoldChange > 0 & Register_1_8$padj < Cutoff_Value)*1
+Register_2_9$MPRAactivity <- (Register_2_9$log2FoldChange > 0 & Register_2_9$padj < Cutoff_Value)*1
+Register_3_10$MPRAactivity <- (Register_3_10$log2FoldChange > 0 & Register_3_10$padj < Cutoff_Value)*1
+
+# Number of red points?
+table(Register_1_8$MPRAactivity)
+table(Register_2_9$MPRAactivity)
+table(Register_3_10$MPRAactivity)
+
+# Fraction of red points?
+sum((Register_1_8$MPRAactivity == 1)*1)/nrow(Register_1_8)
+sum((Register_2_9$MPRAactivity == 1)*1)/nrow(Register_2_9)
+sum((Register_3_10$MPRAactivity == 1)*1)/nrow(Register_3_10)
+
+################################################################# Average of all 3 registers
+# Format
+colnames(Register_1_8) <- paste(colnames(Register_1_8), "1_8", sep = "_")
+colnames(Register_2_9) <- paste(colnames(Register_2_9), "2_9", sep = "_")
+colnames(Register_3_10) <- paste(colnames(Register_3_10), "3_10", sep = "_")
+TEMP1 <- merge(Register_1_8, Register_2_9, 
+               by.x = "X8.mer_1_8", by.y = "X8.mer_2_9")
+TEMP2 <- merge(TEMP1, Register_3_10, 
+               by.x = "X8.mer_1_8", by.y = "X8.mer_3_10")
+PHO4_PBM_Escores_PADIT <- TEMP2; rm(TEMP1); rm(TEMP2)
+
+# Define Median values
+PHO4_PBM_Escores_PADIT$Median_baseMean <- apply(PHO4_PBM_Escores_PADIT[,c("baseMean_1_8", "baseMean_2_9", "baseMean_3_10")], 1, median)
+PHO4_PBM_Escores_PADIT$Mean_log2FC <- apply(PHO4_PBM_Escores_PADIT[,c("log2FoldChange_1_8", "log2FoldChange_2_9", "log2FoldChange_3_10")], 1, median)
+PHO4_PBM_Escores_PADIT$padj <- apply(PHO4_PBM_Escores_PADIT[,c("padj_1_8", "padj_2_9", "padj_3_10")], 1, median)
+PHO4_PBM_Escores_PADIT$MPRAactivity <- apply(PHO4_PBM_Escores_PADIT[,c("MPRAactivity_1_8", "MPRAactivity_2_9", "MPRAactivity_3_10")], 1, median)
+
+# Account for the effect of flanking nucleotides
+PHO4_PBM_Escores_PADIT$Median_baseMean <- ifelse(substr(PHO4_PBM_Escores_PADIT$X8.mer_1_8, 1, 4) == "ACGT" | substr(PHO4_PBM_Escores_PADIT$X8.mer.1_1_8, 1, 4) == "ACGT",
+                                                 PHO4_PBM_Escores_PADIT$baseMean_2_9,
+                                                 PHO4_PBM_Escores_PADIT$Median_baseMean)
+PHO4_PBM_Escores_PADIT$Mean_log2FC <- ifelse(substr(PHO4_PBM_Escores_PADIT$X8.mer_1_8, 1, 4) == "ACGT" | substr(PHO4_PBM_Escores_PADIT$X8.mer.1_1_8, 1, 4) == "ACGT",
+                                                 PHO4_PBM_Escores_PADIT$log2FoldChange_2_9,
+                                                 PHO4_PBM_Escores_PADIT$Mean_log2FC)
+PHO4_PBM_Escores_PADIT$padj <- ifelse(substr(PHO4_PBM_Escores_PADIT$X8.mer_1_8, 1, 4) == "ACGT" | substr(PHO4_PBM_Escores_PADIT$X8.mer.1_1_8, 1, 4) == "ACGT",
+                                                 PHO4_PBM_Escores_PADIT$padj_2_9,
+                                                 PHO4_PBM_Escores_PADIT$padj)
+PHO4_PBM_Escores_PADIT$MPRAactivity <- ifelse(substr(PHO4_PBM_Escores_PADIT$X8.mer_1_8, 1, 4) == "ACGT" | substr(PHO4_PBM_Escores_PADIT$X8.mer.1_1_8, 1, 4) == "ACGT",
+                                                 PHO4_PBM_Escores_PADIT$MPRAactivity_2_9,
+                                                 PHO4_PBM_Escores_PADIT$MPRAactivity)
+
+# Add PBM E-scores and Z-scores
+TEMP <- merge(PHO4_PBM_Escores, PHO4_PBM_Escores_PADIT, 
+              by.x = "X8.mer", by.y = "X8.mer_1_8")
+PHO4_PBM_Escores_PADIT <- TEMP; rm(TEMP)
+
+# Format PADIT-seq data
+TEMP <- PHO4_PBM_Escores_PADIT[, c("X8.mer.1", "E.score", "Z.score", "Mean_log2FC", "padj", "MPRAactivity")]
+colnames(TEMP) <- c("X8.mer", "E.score", "Z.score", "Mean_log2FC", "padj", "MPRAactivity")
+PHO4_PBM_Escores_PADIT_df <- rbind(PHO4_PBM_Escores_PADIT[, c("X8.mer", "E.score", "Z.score", "Mean_log2FC", "padj", "MPRAactivity")], 
+                                   TEMP); rm(TEMP)
+```
+
+
+# Shuffled peaks (random)
+```{r}
+# Read Peak File
+ChIP_nexus_peaks_shuffled_random <- read.table(paste(paste(Working_dir, "Input_Files/ChIP-nexus_data", sep = "/"), "GSM6267786_sc_myc_pho4_nexus_2_peaks_shufled1.bed.fa2.0.txt", sep = "/"), header = FALSE)
+colnames(ChIP_nexus_peaks_shuffled_random) <- c("chr", "start", "end", "DNA_sequence")
+
+# Tile PBM e-scores across peaks and obtain number of consecutive overlapping binding sites
+for(i in 1:nrow(ChIP_nexus_peaks_shuffled_random))
+{
+  Current_DNA_sequence <- ChIP_nexus_peaks_shuffled_random$DNA_sequence[i]
+  PADIT_tiling <- data.frame()
+  for(j in 1:(nchar(Current_DNA_sequence) - 7))
+  {
+    PADIT_tiling[j, 1] <- substr(Current_DNA_sequence, j, j + 7)
+  }
+  colnames(PADIT_tiling) <- c("kmer")
+  PHO4_PBM_Escores_PADIT_df_subset <- PHO4_PBM_Escores_PADIT_df[which(PHO4_PBM_Escores_PADIT_df$X8.mer %in% PADIT_tiling$kmer),]
+  PHO4_PBM_Escores_PADIT_df_subset <- PHO4_PBM_Escores_PADIT_df_subset[match(PADIT_tiling$kmer, PHO4_PBM_Escores_PADIT_df_subset$X8.mer),]
+  PADIT_tiling <- PHO4_PBM_Escores_PADIT_df_subset
+  
+  # Save
+  Longest1s_result <- Longest_1s(PADIT_tiling$MPRAactivity)
+  ChIP_nexus_peaks_shuffled_random$Max_numOverlappingBS[i] <- Longest1s_result$highest
+  ChIP_nexus_peaks_shuffled_random$Max_numOverlappingBS_position[i] <- Longest1s_result$highest_position
+  ChIP_nexus_peaks_shuffled_random$SecondMax_numOverlappingBS[i] <- Longest1s_result$second_highest
+}
+ChIP_nexus_peaks_shuffled_random$PeakLength <- ChIP_nexus_peaks_shuffled_random$end - ChIP_nexus_peaks_shuffled_random$start
+
+```
+
+
+# Shuffled peaks (local)
+```{r}
+# Read Peak File
+ChIP_nexus_peaks <- read.table(paste(paste(Working_dir, "Input_Files/ChIP-nexus_data", sep = "/"), "GSM6267786_sc_myc_pho4_nexus_2_peaks_seq.narrowPeak", sep = "/"), header = FALSE)
+colnames(ChIP_nexus_peaks) <- c("chr", "start", "end", "PeakName", paste("V", 5:10, sep = ""), "DNA_sequence")
+
+# Read Peak File
+ChIP_nexus_peaks_shuffled_local <- read.table(paste(paste(Working_dir, "Input_Files/ChIP-nexus_data", sep = "/"), "seq_Pho4.tsv", sep = "/"), header = FALSE)
+# ChIP_nexus_peaks_shuffled_local <- ChIP_nexus_peaks_shuffled_local[which(! ChIP_nexus_peaks_shuffled_local$V1 %in% ChIP_nexus_peaks$PeakName),]
+ChIP_nexus_peaks_shuffled_local <- ChIP_nexus_peaks_shuffled_local[which(ChIP_nexus_peaks_shuffled_local$V1 %in% c(paste(ChIP_nexus_peaks$PeakName, "local+1", sep = "-")) ), ]
+colnames(ChIP_nexus_peaks_shuffled_local) <- c("V2", "DNA_sequence")
+
+# Tile PBM e-scores across peaks and obtain number of consecutive overlapping binding sites
+for(i in 1:nrow(ChIP_nexus_peaks_shuffled_local))
+{
+  Current_DNA_sequence <- ChIP_nexus_peaks_shuffled_local$DNA_sequence[i]
+  PADIT_tiling <- data.frame()
+  for(j in 1:(nchar(Current_DNA_sequence) - 7))
+  {
+    PADIT_tiling[j, 1] <- substr(Current_DNA_sequence, j, j + 7)
+  }
+  colnames(PADIT_tiling) <- c("kmer")
+  PHO4_PBM_Escores_PADIT_df_subset <- PHO4_PBM_Escores_PADIT_df[which(PHO4_PBM_Escores_PADIT_df$X8.mer %in% PADIT_tiling$kmer),]
+  PHO4_PBM_Escores_PADIT_df_subset <- PHO4_PBM_Escores_PADIT_df_subset[match(PADIT_tiling$kmer, PHO4_PBM_Escores_PADIT_df_subset$X8.mer),]
+  PADIT_tiling <- PHO4_PBM_Escores_PADIT_df_subset
+  
+  # Save
+  Longest1s_result <- Longest_1s(PADIT_tiling$MPRAactivity)
+  ChIP_nexus_peaks_shuffled_local$Max_numOverlappingBS[i] <- Longest1s_result$highest
+  ChIP_nexus_peaks_shuffled_local$Max_numOverlappingBS_position[i] <- Longest1s_result$highest_position
+  ChIP_nexus_peaks_shuffled_local$SecondMax_numOverlappingBS[i] <- Longest1s_result$second_highest
+}
+
+```
+
+
+# Actual Peaks
+```{r}
+# Read Peak File
+ChIP_nexus_peaks <- read.table(paste(paste(Working_dir, "Input_Files/ChIP-nexus_data", sep = "/"), "GSM6267786_sc_myc_pho4_nexus_2_peaks_seq.narrowPeak", sep = "/"), header = FALSE)
+colnames(ChIP_nexus_peaks) <- c("chr", "start", "end", "PeakName", paste("V", 5:10, sep = ""), "DNA_sequence")
+
+# Tile PBM e-scores across peaks and obtain number of consecutive overlapping binding sites
+for(i in 1:nrow(ChIP_nexus_peaks))
+{
+  Current_DNA_sequence <- ChIP_nexus_peaks$DNA_sequence[i]
+  PADIT_tiling <- data.frame()
+  for(j in 1:(nchar(Current_DNA_sequence) - 7))
+  {
+    PADIT_tiling[j, 1] <- substr(Current_DNA_sequence, j, j + 7)
+  }
+  colnames(PADIT_tiling) <- c("kmer")
+  PHO4_PBM_Escores_PADIT_df_subset <- PHO4_PBM_Escores_PADIT_df[which(PHO4_PBM_Escores_PADIT_df$X8.mer %in% PADIT_tiling$kmer),]
+  PHO4_PBM_Escores_PADIT_df_subset <- PHO4_PBM_Escores_PADIT_df_subset[match(PADIT_tiling$kmer, PHO4_PBM_Escores_PADIT_df_subset$X8.mer),]
+  PADIT_tiling <- PHO4_PBM_Escores_PADIT_df_subset
+  
+  # Save
+  Longest1s_result <- Longest_1s(PADIT_tiling$MPRAactivity)
+  ChIP_nexus_peaks$Max_numOverlappingBS[i] <- Longest1s_result$highest
+  ChIP_nexus_peaks$Max_numOverlappingBS_position[i] <- Longest1s_result$highest_position
+  ChIP_nexus_peaks$SecondMax_numOverlappingBS[i] <- Longest1s_result$second_highest
+}
+ChIP_nexus_peaks$PeakLength <- ChIP_nexus_peaks$end - ChIP_nexus_peaks$start
+
+# Histogram (random)
+length(ChIP_nexus_peaks_shuffled_random$Max_numOverlappingBS)
+length(ChIP_nexus_peaks$Max_numOverlappingBS)
+hist(ChIP_nexus_peaks_shuffled_random$Max_numOverlappingBS, breaks = 20, col = "black", 
+     main = "Background is random genomic regions", xlim = c(0, 6))
+hist(ChIP_nexus_peaks$Max_numOverlappingBS, breaks = 40, col = "red", add = TRUE)
+
+# Wilcoxon rank sum test
+wilcox.test(ChIP_nexus_peaks_shuffled_random$Max_numOverlappingBS, 
+            ChIP_nexus_peaks$Max_numOverlappingBS)
+
+# Histogram (local)
+length(ChIP_nexus_peaks_shuffled_local$Max_numOverlappingBS)
+length(ChIP_nexus_peaks$Max_numOverlappingBS)
+hist(ChIP_nexus_peaks_shuffled_local$Max_numOverlappingBS, breaks = 20, col = "black", 
+     main = "Background is local", xlim = c(0, 6))
+hist(ChIP_nexus_peaks$Max_numOverlappingBS, breaks = 40, col = "red", add = TRUE)
+
+# Wilcoxon rank sum test
+wilcox.test(ChIP_nexus_peaks_shuffled_local$Max_numOverlappingBS, 
+            ChIP_nexus_peaks$Max_numOverlappingBS)
+
+# Write
+write.table(ChIP_nexus_peaks, file = paste(paste(Working_dir, "Input_Files/ChIP-nexus_data", sep = "/"), "GSM6267786_sc_myc_pho4_nexus_2_peaks_seq_numOverlappingBS.narrowPeak", sep = "/"), col.names = TRUE, row.names = FALSE, quote = FALSE, sep = "\t")
+
+```
+
+
+Define some functions
+```{r}
+######################################################### Longest stretch of 1's
+Longest_1s <- function(vec) {
+  
+  # replace NA by 0
+  vec[is.na(vec)] <- 0
+  
+  # Ensure that the vector contains only 0s and 1s
+  if (!all(vec %in% c(0, 1))) {
+    stop("The vector should contain only 0s and 1s")
+  }
+
+  # Use rle to compute the lengths of sequences of 1s and 0s
+  runs <- rle(vec)
+
+  # Extract the lengths of sequences of 1s only
+  lengths_of_ones <- runs$lengths[runs$values == 1]
+
+  # If there are no sequences of 1s, return a maximum length of 0 and start position as NA
+  if (length(lengths_of_ones) == 0) {
+    return(list(max_length = 0, start_position = NA))
+  }
+
+  # Identify the maximum length of the 1s sequences
+  max_length <- max(lengths_of_ones)
+
+  # Find the position (index) where the maximum stretch of 1s begins
+  start_positions_of_ones <- cumsum(runs$lengths) - runs$lengths + 1
+  start_position <- start_positions_of_ones[which(runs$lengths == max_length & runs$values == 1)[1]]
+
+  # Return the maximum length and start position as a list
+  return(list(max_length = max_length, start_position = start_position))
+}
+
+# Example usage:
+vec <- c(1, 1, 0, 1, 1, 1, 0, 0, 1, 1, 0, 1)
+result <- Longest_1s(vec)
+print(paste("Max length:", result$max_length, "| Start position:", result$start_position))
+
+######################################################### Plot heatmap
+plot_Heatmap <- function(Heatmap_DF_log2FC_rd_subset_subset, size)
+{
+  Heatmap_DF_log2FC_rd_subset_subset <- Heatmap_DF_log2FC_rd_subset_subset[which(apply(Heatmap_DF_log2FC_rd_subset_subset, 1, min) > -10), ]
+  sub_mat <- Heatmap_DF_log2FC_rd_subset_subset[, 5:(ncol(Heatmap_DF_log2FC_rd_subset_subset)-4)]
+  Heatmap_DF_log2FC_rd_subset_subset <- Heatmap_DF_log2FC_rd_subset_subset[order(apply(sub_mat, 1, sum), decreasing = TRUE), ]
+  pheatmap(Heatmap_DF_log2FC_rd_subset_subset, 
+         cluster_cols = FALSE, cluster_rows = FALSE, 
+         show_rownames = FALSE, show_colnames =  FALSE, scale = "none", 
+         color = inferno(100),
+         main = paste(size, "bps", sep = " ")) 
+}
+
+# Function that encapsulates the logic for processing each peak and creating the corresponding data frame
+process_peak <- function(peak_data, dds_results_PHO4_df, max_length) {
+  CurrentPeak <- toupper(peak_data$DNA)
+  Sequence_10mers_DF <- data.frame(V1 = substring(CurrentPeak, 1:(nchar(CurrentPeak)-7), 8:nchar(CurrentPeak)))
+  
+  dds_results_PHO4_df_subset <- dds_results_PHO4_df[dds_results_PHO4_df$TFBS %in% Sequence_10mers_DF$V1, ]
+  dds_results_PHO4_df_subset <- dds_results_PHO4_df_subset[match(Sequence_10mers_DF$V1, dds_results_PHO4_df_subset$TFBS), ]
+  
+  Longest_1s_results <- Longest_1s(dds_results_PHO4_df_subset$MPRAactivity)
+  
+  if(Longest_1s_results$max_length == max_length && 
+     Longest_1s_results$start_position > 4 && 
+     (Longest_1s_results$start_position + max_length + 10) < nrow(dds_results_PHO4_df_subset)) {
+    
+    log2FC <- dds_results_PHO4_df_subset$log2FoldChange[(Longest_1s_results$start_position-4):(Longest_1s_results$start_position+max_length+3)]
+    
+    result <- c(
+      peak_data$chr,
+      peak_data$start + (Longest_1s_results$start_position - 3) - 1,
+      peak_data$start + (Longest_1s_results$start_position + max_length + 6),
+      substr(peak_data$DNA, 
+             (Longest_1s_results$start_position-4), 
+             (Longest_1s_results$start_position+max_length+10)),
+      as.numeric(log2FC)
+    )
+    
+    return(result)
+  }
+  
+  return(NULL)
+}
+```
+
+
+
+# Heatmap of consecutively active 8-mers 
+```{r}
+# format PHO4_PBM_Escores_PADIT_df
+dds_results_PHO4_df <- PHO4_PBM_Escores_PADIT_df
+colnames(dds_results_PHO4_df) <- c("TFBS", "E.score", "Z.score", "log2FoldChange", "padj", "MPRAactivity")
+
+# Read ChIP-seq peaks with DNA sequence
+ChIP_nexus_peaks <- read.table(paste(paste(Working_dir, "Input_Files/ChIP-nexus_data", sep = "/"), "GSM6267788_sc_myc_cbf1_nexus_2_peaks_seq.narrowPeak", sep = "/"))
+ChIP_nexus_peaks <- ChIP_nexus_peaks[complete.cases(ChIP_nexus_peaks), ]
+colnames(ChIP_nexus_peaks) <- c("chr", "start", "end", "PeakName", paste("V", 5:10, sep = ""), "DNA_sequence")
+ChIP_nexus_peaks <- ChIP_nexus_peaks[, c("chr", "start", "end", "DNA_sequence")]
+colnames(ChIP_nexus_peaks) <- c("chr", "start", "end", "DNA")
+
+# Initialize lists to store results
+results_list <- list(DF3 = list(), DF4 = list(), DF5 = list())
+
+# Process each peak
+for(i in 1:nrow(ChIP_nexus_peaks)) {
+  for(max_length in 3:5) {
+    result <- process_peak(ChIP_nexus_peaks[i, ], dds_results_PHO4_df, max_length)
+    if (!is.null(result)) {
+      results_list[[paste0("DF", max_length)]][[length(results_list[[paste0("DF", max_length)]]) + 1]] <- result
+    }
+  }
+}
+
+# Convert lists to data frames
+for(max_length in 3:5) {
+  df_name <- paste0("DF", max_length)
+  if(length(results_list[[df_name]]) > 0) {
+    df <- do.call(rbind, results_list[[df_name]])
+    df <- as.data.frame(df, stringsAsFactors = FALSE)
+    
+    # Determine the number of columns
+    num_cols <- ncol(df)
+    
+    # Assign column names
+    colnames(df) <- c("chr", "start", "end", "DNA", paste0("V", 5:num_cols))
+    
+    # Convert numeric columns
+    for(i in 5:num_cols) {
+      df[,i] <- as.numeric(df[,i])
+    }
+    
+    # Assign the data frame to the global environment
+    assign(df_name, df, envir = .GlobalEnv)
+  } else {
+    # If no results, create an empty data frame
+    assign(df_name, data.frame(), envir = .GlobalEnv)
+    message(paste("No results for", df_name))
+  }
+}
+
+######################################################### Plot heatmaps
+# Heatmap (log2FC) 3 consecutive
+plot_Heatmap(data.matrix(DF3[, 5:ncol(DF3)]), "10")
+
+# Heatmap (log2FC) 4 consecutive
+plot_Heatmap(data.matrix(DF4[, 5:ncol(DF4)]), "11")
+
+# Heatmap (log2FC) 5 consecutive
+plot_Heatmap(data.matrix(DF5[, 5:ncol(DF5)]), "12")
+
+######################################################### Plot average across positions
+# 3 consecutive
+plot(1:ncol(DF3[, 5:ncol(DF3)]), 
+     apply(DF3[, 5:ncol(DF3)], 2, mean), 
+     pch = 19, type = "b", cex = 4, 
+     col = c(rep("black", times = 4), rep("red", times = 3), rep("black", times = 4)))
+
+# 4 consecutive
+plot(1:ncol(DF4[, 5:ncol(DF4)]), 
+     apply(DF4[, 5:ncol(DF4)], 2, mean), 
+     pch = 19, type = "b", cex = 4, 
+     col = c(rep("black", times = 4), rep("red", times = 4), rep("black", times = 4)))
+
+# 5 consecutive
+plot(1:ncol(DF5[, 5:ncol(DF5)]), 
+     apply(DF5[, 5:ncol(DF5)], 2, mean), 
+     pch = 19, type = "b", cex = 4, 
+     col = c(rep("black", times = 4), rep("red", times = 5), rep("black", times = 4)))
+
+######################################################### Write files to map PhastCons conservation scores
+write.table(DF3, file = paste(paste(Working_dir, "Output_Files", sep = "/"), "PHO4_ChIP-nexus_3consecutive8mers_and4bpsFlank_log2FC.bed", sep = "/"), col.names = FALSE, row.names = FALSE, quote = FALSE, sep = "\t")
+write.table(DF4, file = paste(paste(Working_dir, "Output_Files", sep = "/"), "PHO4_ChIP-nexus_4consecutive8mers_and4bpsFlank_log2FC.bed", sep = "/"), col.names = FALSE, row.names = FALSE, quote = FALSE, sep = "\t")
+write.table(DF5, file = paste(paste(Working_dir, "Output_Files", sep = "/"), "PHO4_ChIP-nexus_5consecutive8mers_and4bpsFlank_log2FC.bed", sep = "/"), col.names = FALSE, row.names = FALSE, quote = FALSE, sep = "\t")
+```
+
+
+
+# Generate logos
+```{r}
+library(seqLogo)
+
+# Function to generate PWM logo for any specified k-mers
+Generate_PWM_seqlogo <- function(kmers_vec, kmer_length = 8)
+{
+  # Generate data frame for seqlogo
+  kmers_vec_df <- data.frame()
+  for(i in 1:kmer_length)
+  {
+    letter_i <- substr(kmers_vec, i, i)
+    count <- 0
+    for(j in c("A", "C", "G", "T"))
+    {
+      count <- count + 1
+      kmers_vec_df[i, count] <- sum(letter_i == j)
+    }
+  }
+  colnames(kmers_vec_df) <- c("A", "C", "G", "T")
+  
+  #define function that divides the frequency by the row sum i.e. proportions
+  proportion <- function(x){
+     rs <- sum(x);
+     return(x / rs);
+  }
+   
+  #create position weight matrix
+  TBX5_seqlogo <- apply(kmers_vec_df, 1, proportion)
+  TBX5_seqlogo <- makePWM(TBX5_seqlogo)
+  seqLogo(TBX5_seqlogo)
+}
+
+#
+DF3 <- read.table(paste(paste(Working_dir, "Output_Files", sep = "/"), "PHO4_ChIP-nexus_3consecutive8mers_and4bpsFlank_log2FC.bed", sep = "/"), header = FALSE)
+Generate_PWM_seqlogo(substr(DF3$V4, 2, 17), 16)
+
+#
+DF4 <- read.table(paste(paste(Working_dir, "Output_Files", sep = "/"), "PHO4_ChIP-nexus_4consecutive8mers_and4bpsFlank_log2FC.bed", sep = "/"), header = FALSE)
+Generate_PWM_seqlogo(substr(DF4$V4, 2, 18), 17)
+
+#
+DF5 <- read.table(paste(paste(Working_dir, "Output_Files", sep = "/"), "PHO4_ChIP-nexus_5consecutive8mers_and4bpsFlank_log2FC.bed", sep = "/"), header = FALSE)
+Generate_PWM_seqlogo(substr(DF5$V4, 2, 19), 18)
+
+
+```
+

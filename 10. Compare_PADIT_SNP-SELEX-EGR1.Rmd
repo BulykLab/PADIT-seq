@@ -1,0 +1,531 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+
+# Set Global Variables here
+
+```{r}
+# Please change the working directory
+Working_dir <- "~/Desktop/AVATAR/PADIT-seq-Manuscript/Code_Availability_Revision/"
+
+# Please be sure to install these libraries
+library(pheatmap); library(ggplot2); library(DESeq2); library(ggrepel); library("stringr"); library(viridis)
+
+# FDR cutoff (do not change)
+Cutoff_Value <- 0.05
+Primer_sequence <- "GTCTGTGTTCCGTTGTCCGTGCTG"
+```
+
+# Important functions
+```{r}
+reverse_complement <- function(dna_sequence) {
+  # Convert the input to uppercase to handle both cases
+  dna_sequence <- toupper(dna_sequence)
+  
+  # Define the complement base pairs
+  complement <- c(A = "T", T = "A", C = "G", G = "C")
+  
+  # Split the sequence into individual bases
+  bases <- strsplit(dna_sequence, "")[[1]]
+  
+  # Get the complement of each base
+  complemented <- complement[bases]
+  
+  # Reverse the complemented sequence and join it back into a string
+  reverse_complemented <- paste(rev(complemented), collapse = "")
+  
+  return(reverse_complemented)
+}
+
+# Example usage:
+dna_seq <- "ATGCATGC"
+result <- reverse_complement(dna_seq)
+print(result)
+```
+
+
+# Read EGR1 9-mer PADIT-seq log2foldchange values for the 2 registers
+```{r}
+# Read
+Register_1_9 <- read.table(paste(paste(Working_dir, "Output_Files", sep = "/"), "ZIF268_all9mers_1_9_median.txt", sep = "/"), header = TRUE)
+Register_2_10 <- read.table(paste(paste(Working_dir, "Output_Files", sep = "/"), "ZIF268_all9mers_2_10_median.txt", sep = "/"), header = TRUE)
+
+# Re-define MPRAactivity
+Register_1_9$MPRAactivity <- (Register_1_9$log2FoldChange > 0 & Register_1_9$padj < Cutoff_Value)*1
+Register_2_10$MPRAactivity <- (Register_2_10$log2FoldChange > 0 & Register_2_10$padj < Cutoff_Value)*1
+
+# Format
+colnames(Register_1_9) <- paste(colnames(Register_1_9), "1_9", sep = "_")
+colnames(Register_2_10) <- paste(colnames(Register_2_10), "2_10", sep = "_")
+TEMP1 <- merge(Register_1_9, Register_2_10,
+               by.x = "X9.mer_1_9", by.y = "X9.mer_2_10")
+ZIF268_PBM_Escores_PADIT <- TEMP1; rm(TEMP1)
+ZIF268_PBM_Escores_PADIT$Mean_log2FC <- apply(ZIF268_PBM_Escores_PADIT[,c("log2FoldChange_1_9", "log2FoldChange_2_10")], 1, min)
+ZIF268_PBM_Escores_PADIT$MPRAactivity <- apply(ZIF268_PBM_Escores_PADIT[,c("MPRAactivity_1_9", "MPRAactivity_2_10")], 1, min)
+
+#
+df1 <- ZIF268_PBM_Escores_PADIT[,c("X9.mer_1_9", "Mean_log2FC", "MPRAactivity")]
+colnames(df1) <- c("TFBS", "log2FoldChange", "MPRAactivity")
+df2 <- ZIF268_PBM_Escores_PADIT[,c("X9.mer.1_1_9", "Mean_log2FC", "MPRAactivity")]
+colnames(df2) <- c("TFBS", "log2FoldChange", "MPRAactivity")
+dds_results_EGR1_df <- rbind(df1, df2)
+dds_results_EGR1_df$MPRAactivity[is.na(dds_results_EGR1_df$MPRAactivity)] <- 0
+
+```
+
+
+# SNP-SELEX
+```{r}
+# Read and format SNP-SELEX data
+EGR1_SNP_SELEX <- read.table(paste(paste(Working_dir, "Input_Files/SNP-SELEX", sep = "/"), "41586_2021_3211_MOESM13_ESM_EGR1.txt", sep = "/"), header = TRUE)
+EGR1_SNP_SELEX$Coordinates <- paste(">", paste(paste(EGR1_SNP_SELEX$chr, EGR1_SNP_SELEX$start, sep = ":"), EGR1_SNP_SELEX$end, sep = "-"), sep = "")
+DNA_Sequences <- read.table(paste(paste(Working_dir, "Input_Files/SNP-SELEX", sep = "/"), "41586_2021_3211_MOESM13_ESM_EGR1.bed.fa.txt", sep = "/"), header = TRUE)
+TEMP <- merge(EGR1_SNP_SELEX, DNA_Sequences, by = "Coordinates")
+EGR1_SNP_SELEX <- TEMP
+EGR1_SNP_SELEX$DNA_REF <- toupper(EGR1_SNP_SELEX$DNA_REF)
+
+for(i in 1:nrow(EGR1_SNP_SELEX))
+{
+  if(substr(EGR1_SNP_SELEX$DNA_REF[i], 20, 20) == EGR1_SNP_SELEX$ref[i])
+  {
+    EGR1_SNP_SELEX$DNA_ALT[i] <- EGR1_SNP_SELEX$DNA_REF[i]
+    substr(EGR1_SNP_SELEX$DNA_ALT[i], 20, 20) <- EGR1_SNP_SELEX$alt[i]
+  }
+}
+EGR1_SNP_SELEX <- unique(EGR1_SNP_SELEX)
+
+######################################################### Tile
+#
+log2FC_ref <- list()
+MPRA_activity_ref <- list()
+log2FC_alt <- list()
+MPRA_activity_alt <- list()
+
+# 
+for(i in 1:nrow(EGR1_SNP_SELEX))
+{
+  # Ref
+  Current_DNA_sequence <- EGR1_SNP_SELEX$DNA_REF[i]
+  Sequence_9mers_DF <- data.frame()
+  for(j in 1:(nchar(Current_DNA_sequence) - 8))
+  {
+    Sequence_9mers_DF[j, 1] <- substr(Current_DNA_sequence, j, j+8)
+  }
+  dds_results_EGR1_df_subset <- dds_results_EGR1_df[which(dds_results_EGR1_df$TFBS %in% Sequence_9mers_DF$V1),]
+  dds_results_EGR1_df_subset <- dds_results_EGR1_df_subset[match(Sequence_9mers_DF$V1, dds_results_EGR1_df_subset$TFBS),] 
+  log2FC_ref[[i]] <- dds_results_EGR1_df_subset$log2FoldChange
+  MPRA_activity_ref[[i]] <- dds_results_EGR1_df_subset$MPRAactivity
+                    
+  # Alt
+  Current_DNA_sequence <- EGR1_SNP_SELEX$DNA_ALT[i]
+  Sequence_9mers_DF <- data.frame()
+  for(j in 1:(nchar(Current_DNA_sequence) - 8))
+  {
+    Sequence_9mers_DF[j, 1] <- substr(Current_DNA_sequence, j, j+8)
+  }
+  dds_results_EGR1_df_subset <- dds_results_EGR1_df[which(dds_results_EGR1_df$TFBS %in% Sequence_9mers_DF$V1),]
+  dds_results_EGR1_df_subset <- dds_results_EGR1_df_subset[match(Sequence_9mers_DF$V1, dds_results_EGR1_df_subset$TFBS),] 
+  log2FC_alt[[i]] <- dds_results_EGR1_df_subset$log2FoldChange
+  MPRA_activity_alt[[i]] <- dds_results_EGR1_df_subset$MPRAactivity
+}
+
+# Define 
+pval_cutoff <- 0.01
+EGR1_SNP_SELEX$PBS_sig <- (EGR1_SNP_SELEX$pval < pval_cutoff)*1
+EGR1_SNP_SELEX$Diff_MPRA_Activity <- sapply(MPRA_activity_ref, sum) - sapply(MPRA_activity_alt, sum)
+EGR1_SNP_SELEX$Diff_log2FC <- sapply(log2FC_ref, sum) - sapply(log2FC_alt, sum)
+
+# PADIT-seq predictions
+EGR1_SNP_SELEX$PADIT_prediction <- 0
+EGR1_SNP_SELEX$PADIT_prediction[which(EGR1_SNP_SELEX$Diff_MPRA_Activity != 0)] <- 1
+EGR1_SNP_SELEX$PADIT_prediction[which(abs(EGR1_SNP_SELEX$Diff_log2FC) < 1)] <- 0
+
+# Correct definitions
+EGR1_SNP_SELEX$Diff_log2FC[which(abs(EGR1_SNP_SELEX$Diff_log2FC) > 90)] <- 0
+EGR1_SNP_SELEX$Diff_log2FC[which(EGR1_SNP_SELEX$Diff_log2FC > 0 & EGR1_SNP_SELEX$Diff_MPRA_Activity < 0)] <- 0
+EGR1_SNP_SELEX$Diff_log2FC[which(EGR1_SNP_SELEX$Diff_log2FC < 0 & EGR1_SNP_SELEX$Diff_MPRA_Activity > 0)] <- 0
+EGR1_SNP_SELEX$Diff_MPRA_Activity[which(EGR1_SNP_SELEX$Diff_log2FC == 0)] <- 0
+EGR1_SNP_SELEX$Diff_MPRA_Activity[which(EGR1_SNP_SELEX$Diff_log2FC == 0)] <- 0
+EGR1_SNP_SELEX$PADIT_prediction[which(EGR1_SNP_SELEX$Diff_log2FC == 0)] <- 0
+EGR1_SNP_SELEX$PADIT_prediction[which(EGR1_SNP_SELEX$Diff_log2FC == 0)] <- 0
+
+# 
+table(EGR1_SNP_SELEX$PBS_sig, EGR1_SNP_SELEX$PADIT_prediction)
+
+```
+
+
+# Scatter plots
+```{r}
+# Define Interaction Term
+EGR1_SNP_SELEX$PBS.PADIT <- interaction(EGR1_SNP_SELEX$PBS_sig, EGR1_SNP_SELEX$PADIT_prediction)
+
+# Sort
+EGR1_SNP_SELEX$order <- 1
+EGR1_SNP_SELEX$order[which(EGR1_SNP_SELEX$PBS.PADIT == "1.0")] <- 2
+EGR1_SNP_SELEX$order[which(EGR1_SNP_SELEX$PBS.PADIT == "0.1")] <- 3
+EGR1_SNP_SELEX$order[which(EGR1_SNP_SELEX$PBS.PADIT == "1.1")] <- 4
+EGR1_SNP_SELEX <- EGR1_SNP_SELEX[order(EGR1_SNP_SELEX$order, decreasing = FALSE),]
+
+# plot
+ggplot(EGR1_SNP_SELEX, aes(x = Diff_log2FC, y = pbs)) +
+  geom_point(size=2, aes(colour = PBS.PADIT)) + 
+  scale_colour_viridis_d(option = "turbo") + 
+  theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank())
+  theme_dark()
+
+# Correlation
+cor.test(EGR1_SNP_SELEX$Diff_log2FC[which(EGR1_SNP_SELEX$PBS.PADIT != "0.0")], 
+         EGR1_SNP_SELEX$pbs[which(EGR1_SNP_SELEX$PBS.PADIT != "0.0")])
+```
+
+
+
+
+```{r}
+fdr_thresholds <- seq(0, 1, by = 0.01)
+num_pbs_sig <- vector(length = length(fdr_thresholds))
+num_PADIT_seq_sig <- vector(length = length(fdr_thresholds))
+for(i in 1:length(fdr_thresholds))
+{
+  num_pbs_sig[i] <- sum(EGR1_SNP_SELEX$pval < fdr_thresholds[i])
+  num_PADIT_seq_sig[i] <- sum(EGR1_SNP_SELEX$pval < fdr_thresholds[i] & EGR1_SNP_SELEX$PADIT_prediction == 1)
+}
+
+# plot
+plot(fdr_thresholds, num_pbs_sig, 
+     type = "b", pch = 19)
+points(fdr_thresholds, num_PADIT_seq_sig, 
+     type = "b", pch = 19)
+abline(h = sum(EGR1_SNP_SELEX$PADIT_prediction), col = "red")
+abline(v = 0.1, col = "red")
+
+```
+
+
+
+# Euler Diagram
+```{r}
+library(VennDiagram)
+plot.new()
+draw.pairwise.venn(area1 = nrow(EGR1_SNP_SELEX[which(EGR1_SNP_SELEX$PBS_sig == 1),]), 
+                   area2 = nrow(EGR1_SNP_SELEX[which(EGR1_SNP_SELEX$PADIT_prediction == 1),]),
+                   cross.area = nrow(EGR1_SNP_SELEX[which(EGR1_SNP_SELEX$PBS_sig == 1 & EGR1_SNP_SELEX$PADIT_prediction == 1),]), 
+                   fill = c("red", "green"))
+```
+
+# PBS is correlated with the number of overlapping binding sites
+```{r}
+# Format
+EGR1_SNP_SELEX$Diff_MPRA_Activity_abs_format <- abs(EGR1_SNP_SELEX$Diff_MPRA_Activity)
+EGR1_SNP_SELEX$Diff_MPRA_Activity_abs_format[which(EGR1_SNP_SELEX$Diff_MPRA_Activity_abs_format > 5)] <- 5
+
+# Boxplot
+boxplot(abs(EGR1_SNP_SELEX$pbs) ~ EGR1_SNP_SELEX$Diff_MPRA_Activity_abs_format, 
+        outline = FALSE, notch = TRUE,
+        col = c("black", "green", "green", "green", "green", "green"))
+
+# wilcoxon test
+pairwise.wilcox.test(abs(EGR1_SNP_SELEX$pbs), EGR1_SNP_SELEX$Diff_MPRA_Activity_abs_format)
+
+# 
+cor.test(abs(EGR1_SNP_SELEX$pbs), EGR1_SNP_SELEX$Diff_MPRA_Activity_abs_format)
+
+```
+
+
+
+
+# Plot specific examples
+```{r}
+rsid <- "rs79228650" # "rs79228650" !!! 
+
+# 2. "rs113568133 "rs58057954"
+
+# 1. "rs60292798" # "rs1529745" # "rs151837" # "rs2914146" # "rs2524091"
+
+EGR1_SNP_SELEX_subset <- EGR1_SNP_SELEX[which(EGR1_SNP_SELEX$rsid %in% rsid),]
+
+######### Tile
+log2FC_ref <- vector()
+MPRA_activity_ref <- vector()
+log2FC_alt <- vector()
+MPRA_activity_alt <- vector()
+
+# 
+for(i in 1:nrow(EGR1_SNP_SELEX_subset))
+{
+  # Ref
+  Current_DNA_sequence <- EGR1_SNP_SELEX_subset$DNA_REF[i]
+  Sequence_9mers_DF <- data.frame()
+  for(j in 1:(nchar(Current_DNA_sequence) - 8))
+  {
+    Sequence_9mers_DF[j, 1] <- substr(Current_DNA_sequence, j, j+8)
+  }
+  dds_results_EGR1_df_subset <- dds_results_EGR1_df[which(dds_results_EGR1_df$TFBS %in% Sequence_9mers_DF$V1),]
+  dds_results_EGR1_df_subset <- dds_results_EGR1_df_subset[match(Sequence_9mers_DF$V1, dds_results_EGR1_df_subset$TFBS),] 
+  log2FC_ref <- dds_results_EGR1_df_subset$log2FoldChange
+  MPRA_activity_ref <- dds_results_EGR1_df_subset$MPRAactivity
+                    
+  # Alt
+  Current_DNA_sequence <- EGR1_SNP_SELEX_subset$DNA_ALT[i]
+  Sequence_9mers_DF <- data.frame()
+  for(j in 1:(nchar(Current_DNA_sequence) - 8))
+  {
+    Sequence_9mers_DF[j, 1] <- substr(Current_DNA_sequence, j, j+8)
+  }
+  dds_results_EGR1_df_subset <- dds_results_EGR1_df[which(dds_results_EGR1_df$TFBS %in% Sequence_9mers_DF$V1),]
+  dds_results_EGR1_df_subset <- dds_results_EGR1_df_subset[match(Sequence_9mers_DF$V1, dds_results_EGR1_df_subset$TFBS),] 
+  log2FC_alt <- dds_results_EGR1_df_subset$log2FoldChange
+  MPRA_activity_alt <- dds_results_EGR1_df_subset$MPRAactivity
+}
+
+######### plot ref
+col_vec <- rep("black", length(MPRA_activity_ref))
+col_vec[which(MPRA_activity_ref == 1)] <- "red"       
+plot(1:length(col_vec), 
+     log2FC_ref, 
+     pch = 19, type = "b", cex = 4, 
+     col = col_vec, 
+     xlim = c(11, 25),
+     ylim = c(-0.25, 1.75))
+
+######### plot alt
+col_vec <- rep("black", length(MPRA_activity_alt))
+col_vec[which(MPRA_activity_alt == 1)] <- "red"       
+plot(1:length(col_vec), 
+     log2FC_alt, 
+     pch = 19, type = "b", cex = 4, 
+     col = col_vec, 
+     xlim = c(11, 25),
+     ylim = c(-0.25, 1.75))
+
+
+```
+
+
+# Run MotifBreakR
+```{r}
+library(motifbreakR); library(BSgenome); library(MotifDb); library(GenomicRanges)
+library(BSgenome.Hsapiens.UCSC.hg19); library(SNPlocs.Hsapiens.dbSNP155.GRCh37)
+
+######################################################### Run MotifBreakR
+# format
+EGR1_SNP_SELEX_bedFormat <- EGR1_SNP_SELEX[, c("chr", "start", "end")]
+EGR1_SNP_SELEX_bedFormat$start <- EGR1_SNP_SELEX_bedFormat$start + 19
+EGR1_SNP_SELEX_bedFormat$end <- EGR1_SNP_SELEX_bedFormat$end - 20
+EGR1_SNP_SELEX_bedFormat$SNP_ID <- paste(paste(paste(paste(EGR1_SNP_SELEX_bedFormat$chr, EGR1_SNP_SELEX_bedFormat$end, sep = ":"), EGR1_SNP_SELEX$ref, sep = ":"), EGR1_SNP_SELEX$alt, sep = ":"))
+EGR1_SNP_SELEX_bedFormat$V5 <- 0
+EGR1_SNP_SELEX_bedFormat$strand <- "+"
+write.table(EGR1_SNP_SELEX_bedFormat, 
+            file = paste(paste(Working_dir, "Output_Files", sep = "/"), "EGR1_SNP_SELEX_bedFormat.bed", sep = "/"),
+            col.names = FALSE, row.names = FALSE, quote = FALSE, sep = "\t")
+
+# Variants from bed format
+snps.mb.frombed <- variants.from.file(file = paste(paste(Working_dir, "Output_Files", sep = "/"), "EGR1_SNP_SELEX_bedFormat.bed", sep = "/"),
+                                  search.genome = BSgenome.Hsapiens.UCSC.hg19,
+                                  format = "bed")
+# Run MotifBreakR
+results <- motifbreakR(snpList = snps.mb.frombed, filterp = TRUE,
+                       pwmList = MotifDb[grep('egr1', values (MotifDb)$geneSymbol, ignore.case=TRUE)],
+                       threshold = 1e-4,
+                       method = "ic",
+                       bkg = c(A=0.25, C=0.25, G=0.25, T=0.25),
+                       BPPARAM = BiocParallel::SerialParam())
+
+# Convert to data frame
+MotifBreakR_results <- as.data.frame(results, row.names = NULL)
+
+######################################################### Keep only 1 prediction
+Unique_SNP_ids_motifBreakR <- unique(MotifBreakR_results$SNP_id)
+MotifBreakR_results_formatted <- data.frame()
+for(i in 1:length(Unique_SNP_ids_motifBreakR))
+{
+  Current_SNP <- MotifBreakR_results[which(MotifBreakR_results$SNP_id %in% Unique_SNP_ids_motifBreakR[i]), ]
+  if(nrow(Current_SNP) == 1)
+  {
+    MotifBreakR_results_formatted <- rbind(MotifBreakR_results_formatted, 
+                                           Current_SNP)
+    next
+  }
+  if(nrow(Current_SNP) > 1)
+  {
+    Current_SNP <- Current_SNP[which(abs(Current_SNP$alleleDiff) == max(abs(Current_SNP$alleleDiff))),]
+    MotifBreakR_results_formatted <- rbind(MotifBreakR_results_formatted, 
+                                           Current_SNP[1,])
+    next
+  }
+}
+
+# Re-define SNP_ID
+EGR1_SNP_SELEX$SNP_id <- paste(paste(paste(paste(EGR1_SNP_SELEX$chr, EGR1_SNP_SELEX$end - 20, sep = ":"), EGR1_SNP_SELEX$ref, sep = ":"), EGR1_SNP_SELEX$alt, sep = ":"))
+
+# Add MotifBreakR results to data frame
+EGR1_SNP_SELEX_MotifBreakR <- merge(EGR1_SNP_SELEX, MotifBreakR_results_formatted, by = "SNP_id", all.x = TRUE)
+EGR1_SNP_SELEX_MotifBreakR$alleleEffectSize[is.na(EGR1_SNP_SELEX_MotifBreakR$alleleEffectSize)] <- 0
+EGR1_SNP_SELEX_MotifBreakR$effect[is.na(EGR1_SNP_SELEX_MotifBreakR$effect)] <- "none"
+
+# Table (MotifBreakR has a very high false positive rate)
+table(EGR1_SNP_SELEX_MotifBreakR$PBS.PADIT, EGR1_SNP_SELEX_MotifBreakR$effect)
+
+# 
+plot(EGR1_SNP_SELEX_MotifBreakR$alleleEffectSize[which(EGR1_SNP_SELEX_MotifBreakR$PBS_sig == 1)], 
+     EGR1_SNP_SELEX_MotifBreakR$pbs[which(EGR1_SNP_SELEX_MotifBreakR$PBS_sig == 1)])
+
+```
+
+
+
+# Select SNPs to test with PBM
+```{r}
+# 
+numSNPs_toTest <- 287
+
+# set seed
+set.seed(12037)
+
+# SNPs with significant PBS scores are automatically included
+EGR1_SNP_SELEX_MotifBreakR_select4pbm <- EGR1_SNP_SELEX_MotifBreakR[which(EGR1_SNP_SELEX_MotifBreakR$PBS.PADIT %in% c("1.1", "1.0")),]
+dim(EGR1_SNP_SELEX_MotifBreakR_select4pbm)
+
+# Randomly include 50 SNPs not predicted to alter TF binding by both SNP-SELEX and PADIT-seq but predicted to alter binding by MOTIFBREAKR
+EGR1_SNP_SELEX_MotifBreakR_00 <- EGR1_SNP_SELEX_MotifBreakR[which(EGR1_SNP_SELEX_MotifBreakR$PBS.PADIT %in% c("0.0") & EGR1_SNP_SELEX_MotifBreakR$effect != "none"),]
+EGR1_SNP_SELEX_MotifBreakR_00_random50 <- EGR1_SNP_SELEX_MotifBreakR_00[sample(1:nrow(EGR1_SNP_SELEX_MotifBreakR_00), 50),]
+EGR1_SNP_SELEX_MotifBreakR_select4pbm <- rbind(EGR1_SNP_SELEX_MotifBreakR_select4pbm, EGR1_SNP_SELEX_MotifBreakR_00_random50)
+
+# Randomly include 50 SNPs not predicted to alter TF binding by both SNP-SELEX and PADIT-seq, as well as MOTIFBREAKR
+EGR1_SNP_SELEX_MotifBreakR_00 <- EGR1_SNP_SELEX_MotifBreakR[which(EGR1_SNP_SELEX_MotifBreakR$PBS.PADIT %in% c("0.0") & EGR1_SNP_SELEX_MotifBreakR$effect == "none"),]
+EGR1_SNP_SELEX_MotifBreakR_00_random50 <- EGR1_SNP_SELEX_MotifBreakR_00[sample(1:nrow(EGR1_SNP_SELEX_MotifBreakR_00), 50),]
+EGR1_SNP_SELEX_MotifBreakR_select4pbm <- rbind(EGR1_SNP_SELEX_MotifBreakR_select4pbm, EGR1_SNP_SELEX_MotifBreakR_00_random50)
+
+# Randomly include SNPs  predicted to alter TF binding by PADIT-seq only
+EGR1_SNP_SELEX_MotifBreakR_01 <- EGR1_SNP_SELEX_MotifBreakR[which(EGR1_SNP_SELEX_MotifBreakR$PBS.PADIT %in% c("0.1")),]
+table(abs(EGR1_SNP_SELEX_MotifBreakR_01$Diff_MPRA_Activity))
+EGR1_SNP_SELEX_MotifBreakR_01_random241 <- EGR1_SNP_SELEX_MotifBreakR_01[sample(1:nrow(EGR1_SNP_SELEX_MotifBreakR_01), numSNPs_toTest - nrow(EGR1_SNP_SELEX_MotifBreakR_select4pbm)),]
+table(abs(EGR1_SNP_SELEX_MotifBreakR_01_random241$Diff_MPRA_Activity))
+EGR1_SNP_SELEX_MotifBreakR_select4pbm <- rbind(EGR1_SNP_SELEX_MotifBreakR_select4pbm, EGR1_SNP_SELEX_MotifBreakR_01_random241)
+
+# Features of the selected SNPs
+table(abs(EGR1_SNP_SELEX_MotifBreakR_select4pbm$Diff_MPRA_Activity))
+table(EGR1_SNP_SELEX_MotifBreakR_select4pbm$PBS.PADIT, 
+      EGR1_SNP_SELEX_MotifBreakR_select4pbm$effect)
+
+################################ write file
+# remove column that is a list
+EGR1_SNP_SELEX_MotifBreakR_select4pbm <- EGR1_SNP_SELEX_MotifBreakR_select4pbm[, which(!colnames(EGR1_SNP_SELEX_MotifBreakR_select4pbm) %in% c("motifPos"))]
+
+# trim DNA sequence to be 36 bps
+EGR1_SNP_SELEX_MotifBreakR_select4pbm$DNA_REF_trimmed <- substr(EGR1_SNP_SELEX_MotifBreakR_select4pbm$DNA_REF, 3, 38)
+EGR1_SNP_SELEX_MotifBreakR_select4pbm$DNA_ALT_trimmed <- substr(EGR1_SNP_SELEX_MotifBreakR_select4pbm$DNA_ALT, 3, 38)
+
+# write table
+write.table(EGR1_SNP_SELEX_MotifBreakR_select4pbm, 
+            file = "~/Desktop/AVATAR/PADIT-seq-Manuscript/Custom_PBM/Design/SNPs_toTest_with_customPBM_EGR1.txt", 
+            col.names = TRUE, row.names = FALSE, quote = FALSE, sep = "\t")
+
+################################ write probes
+pbm_probes <- vector()
+for(i in 1:nrow(EGR1_SNP_SELEX_MotifBreakR_select4pbm))
+{
+  current_names <- names(pbm_probes)
+  DNA_REF_trimmed <- EGR1_SNP_SELEX_MotifBreakR_select4pbm$DNA_REF_trimmed[i]
+  DNA_ALT_trimmed <- EGR1_SNP_SELEX_MotifBreakR_select4pbm$DNA_ALT_trimmed[i]
+  DNA_REF_trimmed_RC <- reverse_complement(DNA_REF_trimmed)
+  DNA_ALT_trimmed_RC <- reverse_complement(DNA_ALT_trimmed)
+  pbm_probes <- c(pbm_probes, 
+                  DNA_REF_trimmed, DNA_ALT_trimmed, DNA_REF_trimmed_RC, DNA_ALT_trimmed_RC)
+  names(pbm_probes) <- c(current_names, 
+                         paste(EGR1_SNP_SELEX_MotifBreakR_select4pbm$SNP_id[i], "REF__FWD", sep = "__"),
+                         paste(EGR1_SNP_SELEX_MotifBreakR_select4pbm$SNP_id[i], "ALT__FWD", sep = "__"),
+                         paste(EGR1_SNP_SELEX_MotifBreakR_select4pbm$SNP_id[i], "REF__REV", sep = "__"),
+                         paste(EGR1_SNP_SELEX_MotifBreakR_select4pbm$SNP_id[i], "ALT__REV", sep = "__"))
+}
+
+# write probes
+pbm_probes_df <- as.data.frame(pbm_probes)
+pbm_probes_df$Probe_Names <- rownames(pbm_probes_df)
+pbm_probes_df$Probe_sequences_withPrimer <- paste(pbm_probes_df$pbm_probes, 
+                                                  Primer_sequence, 
+                                                  sep = "")
+pbm_probes_df <- pbm_probes_df[, c("Probe_Names", "Probe_sequences_withPrimer")]
+write.table(pbm_probes_df, 
+            file = "~/Desktop/AVATAR/PADIT-seq-Manuscript/Custom_PBM/Design/Final_Probe_sequences/SNPs_toTest_with_customPBM_EGR1_probes.txt",
+            col.names = TRUE, row.names = FALSE, quote = FALSE, sep = "\t")
+
+```
+
+
+
+# spot check
+```{r}
+for(i in 1:20)
+{
+  # Ref
+  Current_DNA_sequence <- pbm_probes_df$Probe_sequences_withPrimer[i]
+  Sequence_9mers_DF <- data.frame()
+  for(j in 1:(nchar(Current_DNA_sequence) - 8))
+  {
+    Sequence_9mers_DF[j, 1] <- substr(Current_DNA_sequence, j, j+8)
+  }
+  dds_results_EGR1_df_subset <- dds_results_EGR1_df[which(dds_results_EGR1_df$TFBS %in% Sequence_9mers_DF$V1),]
+  dds_results_EGR1_df_subset <- dds_results_EGR1_df_subset[match(Sequence_9mers_DF$V1, dds_results_EGR1_df_subset$TFBS),] 
+  dds_results_EGR1_df_subset$Colour <- "black"
+  dds_results_EGR1_df_subset$Colour[which(dds_results_EGR1_df_subset$MPRAactivity == 1)] <- "red"
+  plot(1:nrow(dds_results_EGR1_df_subset), 
+       dds_results_EGR1_df_subset$log2FoldChange, 
+       pch = 19, type = "b", 
+       col = dds_results_EGR1_df_subset$Colour, ylim = c(-0.5, 3.5), 
+       main = pbm_probes_df$Probe_Names[i])
+}
+
+```
+
+
+# SNP predictions and Custom PBM data
+```{r}
+# Read data frame with Alexa 488 values
+Alexa488_signal_df <- read.table(paste(paste(Working_dir, "Input_Files/Custom_PBM/Shubham_custom_PBM_Run1/PBM_experiment_HOXD13_EGR1", sep = "/"), "Alexa488_signalValues_all8chambers_formattedColumns.txt", sep = "/"), header = TRUE)
+
+# Read table containing SNP data
+SNPs_DF_temp <- read.table(paste(paste(Working_dir, "Input_Files/Custom_PBM/Design", sep = "/"), "SNPs_toTest_with_customPBM_EGR1.txt", sep = "/"), header = TRUE)
+SNPs_DF <- EGR1_SNP_SELEX[which(EGR1_SNP_SELEX$SNP_id %in% SNPs_DF_temp$SNP_id), ]
+
+# Obtain Custom PBM data for each SNP
+for(i in 1:nrow(SNPs_DF))
+{
+  SNP <- SNPs_DF$SNP_id[i]
+  
+  # Foward
+  Fwd_or_Rev <- c("FWD", "REV")[1]
+  Alexa488_signal_df_SNP_REF <- Alexa488_signal_df[which(substr(Alexa488_signal_df$ID, 1, nchar(paste(SNP, "REF__FWD", sep = "__"))) == paste(SNP, paste("REF", Fwd_or_Rev, sep = "__"), sep = "__")), ]
+  Alexa488_signal_df_SNP_ALT <- Alexa488_signal_df[which(substr(Alexa488_signal_df$ID, 1, nchar(paste(SNP, "ALT__FWD", sep = "__"))) == paste(SNP, paste("ALT", Fwd_or_Rev, sep = "__"), sep = "__")), ]
+  CustomPBM_Median_Diff_Fwd <- log10(median(c(Alexa488_signal_df_SNP_REF$Alexa488_Chamber5_EGR1_500nM, Alexa488_signal_df_SNP_REF$Alexa488_Chamber7_EGR1_500nM))) - log10(median(c(Alexa488_signal_df_SNP_ALT$Alexa488_Chamber5_EGR1_500nM, Alexa488_signal_df_SNP_ALT$Alexa488_Chamber7_EGR1_500nM)))
+  CustomPBM_pvalue_Fwd <- t.test(log10(c(Alexa488_signal_df_SNP_REF$Alexa488_Chamber5_EGR1_500nM, Alexa488_signal_df_SNP_REF$Alexa488_Chamber7_EGR1_500nM)), log10(c(Alexa488_signal_df_SNP_ALT$Alexa488_Chamber5_EGR1_500nM, Alexa488_signal_df_SNP_ALT$Alexa488_Chamber7_EGR1_500nM)))$p.value
+  
+  # Reverse
+  Fwd_or_Rev <- c("FWD", "REV")[2]
+  Alexa488_signal_df_SNP_REF <- Alexa488_signal_df[which(substr(Alexa488_signal_df$ID, 1, nchar(paste(SNP, "REF__FWD", sep = "__"))) == paste(SNP, paste("REF", Fwd_or_Rev, sep = "__"), sep = "__")), ]
+  Alexa488_signal_df_SNP_ALT <- Alexa488_signal_df[which(substr(Alexa488_signal_df$ID, 1, nchar(paste(SNP, "ALT__FWD", sep = "__"))) == paste(SNP, paste("ALT", Fwd_or_Rev, sep = "__"), sep = "__")), ]
+  CustomPBM_Median_Diff_Rev <- log10(median(c(Alexa488_signal_df_SNP_REF$Alexa488_Chamber5_EGR1_500nM, Alexa488_signal_df_SNP_REF$Alexa488_Chamber7_EGR1_500nM))) - log10(median(c(Alexa488_signal_df_SNP_ALT$Alexa488_Chamber5_EGR1_500nM, Alexa488_signal_df_SNP_ALT$Alexa488_Chamber7_EGR1_500nM)))
+  CustomPBM_pvalue_Rev <- t.test(log10(c(Alexa488_signal_df_SNP_REF$Alexa488_Chamber5_EGR1_500nM, Alexa488_signal_df_SNP_REF$Alexa488_Chamber7_EGR1_500nM)), log10(c(Alexa488_signal_df_SNP_ALT$Alexa488_Chamber5_EGR1_500nM, Alexa488_signal_df_SNP_ALT$Alexa488_Chamber7_EGR1_500nM)))$p.value
+  
+  # Choose orientation with lowest p-value and assign to DF
+  if(CustomPBM_pvalue_Fwd < CustomPBM_pvalue_Rev)
+  {
+    SNPs_DF$CustomPBM_Median_Diff[i] <- CustomPBM_Median_Diff_Fwd
+    SNPs_DF$CustomPBM_pvalue[i] <- CustomPBM_pvalue_Fwd
+  }
+  if(CustomPBM_pvalue_Fwd >= CustomPBM_pvalue_Rev)
+  {
+    SNPs_DF$CustomPBM_Median_Diff[i] <- CustomPBM_Median_Diff_Rev
+    SNPs_DF$CustomPBM_pvalue[i] <- CustomPBM_pvalue_Rev
+  }
+}
+
+# FDR
+SNPs_DF$CustomPBM_pvalue_adj <- p.adjust(SNPs_DF$CustomPBM_pvalue, method = "fdr")
+table(SNPs_DF$CustomPBM_pvalue_adj < 0.05)
+
+```
+
